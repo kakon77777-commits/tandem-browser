@@ -415,6 +415,61 @@ export function createMockContext(): RouteContext {
       on: vi.fn(),
     } as any,
 
+    // ── annotationManager ────────────────────────
+    annotationManager: {
+      list: vi.fn().mockReturnValue([]),
+      get: vi.fn().mockReturnValue(null),
+      create: vi.fn().mockReturnValue({
+        id: 'ann-1',
+        taskId: null,
+        tabId: null,
+        webContentsId: null,
+        url: null,
+        region: { x: 0, y: 0, width: 1, height: 1 },
+        dom: null,
+        message: '',
+        createdAt: Date.now(),
+        resolvedAt: null,
+      }),
+      resolve: vi.fn().mockReturnValue(null),
+      remove: vi.fn().mockReturnValue(false),
+      on: vi.fn(),
+    } as any,
+
+    // ── stateTreeManager ─────────────────────────
+    stateTreeManager: {
+      list: vi.fn().mockReturnValue([]),
+      get: vi.fn().mockReturnValue(null),
+      children: vi.fn().mockReturnValue([]),
+      capture: vi.fn().mockReturnValue({
+        id: 'state-1',
+        parentId: null,
+        taskId: null,
+        tabId: null,
+        webContentsId: null,
+        label: 'snapshot',
+        url: null,
+        domSummary: null,
+        screenshotPath: null,
+        createdAt: Date.now(),
+      }),
+      fork: vi.fn().mockReturnValue({
+        id: 'state-2',
+        parentId: 'state-1',
+        taskId: null,
+        tabId: null,
+        webContentsId: null,
+        label: 'snapshot',
+        url: null,
+        domSummary: null,
+        screenshotPath: null,
+        createdAt: Date.now(),
+      }),
+      compare: vi.fn().mockReturnValue(null),
+      remove: vi.fn().mockReturnValue(false),
+      on: vi.fn(),
+    } as any,
+
     // ── taskManager ─────────────────────────────
     taskManager: {
       listTasks: vi.fn().mockReturnValue([]),
@@ -537,6 +592,7 @@ export function createMockContext(): RouteContext {
         },
       }),
       getTextRef: vi.fn().mockResolvedValue(''),
+      registerBackendNodeId: vi.fn().mockReturnValue('@e1'),
     } as any,
 
     // ── networkMocker ───────────────────────────

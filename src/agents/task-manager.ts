@@ -50,6 +50,8 @@ export interface AITask {
   createdAt: number;
   updatedAt: number;
   completedAt?: number;
+  /** Workspace this task's browser work is scoped to (SRW task↔workspace mapping). See src/agents/task-tree.ts */
+  workspaceId?: string;
 }
 
 export interface TaskActivityEntry {
@@ -179,7 +181,7 @@ export class TaskManager extends EventEmitter {
 
   // ── Task CRUD ──
 
-  createTask(description: string, createdBy: AITask['createdBy'], assignedTo: AITask['assignedTo'], steps: Omit<TaskStep, 'id' | 'status'>[]): AITask {
+  createTask(description: string, createdBy: AITask['createdBy'], assignedTo: AITask['assignedTo'], steps: Omit<TaskStep, 'id' | 'status'>[], workspaceId?: string): AITask {
     const id = `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const task: AITask = {
       id,
@@ -196,9 +198,20 @@ export class TaskManager extends EventEmitter {
       results: [],
       createdAt: Date.now(),
       updatedAt: Date.now(),
+      ...(workspaceId ? { workspaceId } : {}),
     };
     this.saveTask(task);
     this.emit('task-created', task);
+    return task;
+  }
+
+  /** Link a task to a workspace so its browser work is scoped to that workspace's tabs. */
+  setTaskWorkspace(taskId: string, workspaceId: string): AITask | null {
+    const task = this.getTask(taskId);
+    if (!task) return null;
+    task.workspaceId = workspaceId;
+    this.saveTask(task);
+    this.emit('task-updated', task);
     return task;
   }
 

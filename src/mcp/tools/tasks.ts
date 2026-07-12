@@ -78,6 +78,37 @@ export function registerTaskTools(server: McpServer): void {
   );
 
   server.tool(
+    'tandem_task_tree',
+    'Get a task composed with its scoped workspace and views (tabs) — the task↔workspace↔view mapping. ' +
+    'Use this to see which browser tabs belong to a given task instead of guessing from the flat tab list.',
+    {
+      id: z.string().describe('The task ID to retrieve the tree for'),
+    },
+    async ({ id }) => {
+      const tree = await apiCall('GET', `/tasks/${encodeURIComponent(id)}/tree`);
+      return { content: [{ type: 'text', text: JSON.stringify(tree, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    'tandem_task_set_workspace',
+    'Link a task to a workspace so its browser work is scoped there. Pass an existing workspaceId to reuse ' +
+    'one, or omit it to auto-create a new workspace named after the task (reused if already linked).',
+    coerceShape({
+      id: z.string().describe('The task ID'),
+      workspaceId: z.string().optional().describe('Existing workspace ID to link, if reusing one'),
+      name: z.string().optional().describe('Name for a newly created workspace (defaults to the task description)'),
+      icon: z.string().optional().describe('Icon slug for a newly created workspace'),
+      color: z.string().optional().describe('Color for a newly created workspace'),
+    }),
+    async ({ id, workspaceId, name, icon, color }) => {
+      const tree = await apiCall('POST', `/tasks/${encodeURIComponent(id)}/workspace`, { workspaceId, name, icon, color });
+      await logActivity('task_set_workspace', `task ${id} -> workspace ${tree?.workspace?.id ?? workspaceId ?? 'new'}`);
+      return { content: [{ type: 'text', text: JSON.stringify(tree, null, 2) }] };
+    }
+  );
+
+  server.tool(
     'tandem_task_approve',
     'Approve a task step that is waiting for user approval.',
     {

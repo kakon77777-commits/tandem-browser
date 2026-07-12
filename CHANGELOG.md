@@ -4,6 +4,27 @@ All notable changes to Tandem Browser will be documented in this file.
 
 ## Unreleased
 
+### Added (SRW fork — local experiment, not upstreamed)
+
+- **Task↔Workspace↔View mapping** (`src/agents/task-tree.ts`, `AITask.workspaceId`,
+  `TaskManager.setTaskWorkspace()`, `GET/POST /tasks/:id/tree`, `POST /tasks/:id/workspace`,
+  MCP `tandem_task_tree` / `tandem_task_set_workspace`) - composes a task with its
+  scoped workspace and tabs so an agent task node maps to a concrete set of
+  browser state nodes instead of a flat, unrelated tab list.
+- **Human Annotation objects** (`src/annotations/manager.ts`, `src/annotations/dom-resolver.ts`,
+  `/annotations*` routes, MCP `tandem_annotate` / `tandem_annotations_list` /
+  `tandem_annotation_get` / `tandem_annotation_resolve`) - binds a pixel region on a
+  tab to a best-effort DOM element (`@ref`, resolved via CDP `DOM.getNodeForLocation`
+  + the existing snapshot ref system), an optional task (goal context), and a
+  human message, instead of relying on vague natural-language references.
+- **Branching Browser State Tree** (`src/state-tree/manager.ts`, `src/state-tree/capture.ts`,
+  `/state-tree*` routes, MCP `tandem_state_capture` / `tandem_state_fork` /
+  `tandem_state_list` / `tandem_state_get` / `tandem_state_children` /
+  `tandem_state_compare`) - Level 0-2 snapshots (metadata + screenshot + compact
+  DOM summary) organized as a tree via `parentId` instead of linear history, so
+  alternative attempts can branch and be compared side by side. Forking re-observes
+  the live tab and records it as a child; it does not restore full runtime state.
+
 ### Security
 
 - **Shell renderer XSS hardening** (`shell/js/html-escape.js`, `shell/js/**`) -

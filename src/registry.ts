@@ -53,6 +53,8 @@ import type { ClipboardManager } from './clipboard/manager';
 import type { GooglePhotosManager } from './integrations/google-photos';
 import type { PairingManager } from './pairing/manager';
 import type { CloudflarePolicyManager } from './cloudflare/policy-manager';
+import type { AnnotationManager } from './annotations/manager';
+import type { StateTreeManager } from './state-tree/manager';
 
 export interface ManagerRegistry {
   /** Tab lifecycle, grouping, metadata, and focus tracking. See src/tabs/manager.ts */
@@ -153,4 +155,8 @@ export interface ManagerRegistry {
   agentTrust: AgentTrustStore;
   /** Tab/origin-scoped Cloudflare challenge policy state. See src/cloudflare/policy-manager.ts */
   cloudflarePolicyManager: CloudflarePolicyManager;
+  /** Human Annotation objects binding pixel region + DOM ref + task goal + message. See src/annotations/manager.ts */
+  annotationManager: AnnotationManager;
+  /** Branching Browser State Tree (snapshot/fork/compare) instead of linear history. See src/state-tree/manager.ts */
+  stateTreeManager: StateTreeManager;
 }

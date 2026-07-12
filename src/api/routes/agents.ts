@@ -5,6 +5,7 @@ import { handleRouteError } from '../../utils/errors';
 import { DEFAULT_TIMEOUT_MS } from '../../utils/constants';
 import type { TaskStatus } from '../../agents/task-manager';
 import { domainKeyFromUrl } from '../../security/agent-trust';
+import { buildTaskTree, ensureTaskWorkspace } from '../../agents/task-tree';
 
 /**
  * Register agent task management, tab-lock, workflow, and watch routes.
@@ -35,17 +36,48 @@ export function registerAgentRoutes(router: Router, ctx: RouteContext): void {
 
   router.post('/tasks', (req: Request, res: Response) => {
     try {
-      const { description, createdBy, assignedTo, steps } = req.body;
+      const { description, createdBy, assignedTo, steps, workspaceId } = req.body;
       if (!description || !steps) {
         return res.status(400).json({ error: 'description and steps required' });
       }
-      const task = ctx.taskManager.createTask(
-        description,
-        createdBy || 'claude',
-        assignedTo || 'claude',
-        steps
-      );
+      const task = workspaceId
+        ? ctx.taskManager.createTask(description, createdBy || 'claude', assignedTo || 'claude', steps, workspaceId)
+        : ctx.taskManager.createTask(description, createdBy || 'claude', assignedTo || 'claude', steps);
       res.json(task);
+    } catch (e) {
+      handleRouteError(res, e);
+    }
+  });
+
+  // ═══════════════════════════════════════════════
+  // TASK TREE — SRW task↔workspace↔view mapping
+  // ═══════════════════════════════════════════════
+
+  router.get('/tasks/:id/tree', (req: Request, res: Response) => {
+    try {
+      const taskId = req.params.id as string;
+      const tree = buildTaskTree(
+        { taskManager: ctx.taskManager, workspaceManager: ctx.workspaceManager, tabManager: ctx.tabManager },
+        taskId
+      );
+      if (!tree) return res.status(404).json({ error: 'Task not found' });
+      res.json(tree);
+    } catch (e) {
+      handleRouteError(res, e);
+    }
+  });
+
+  router.post('/tasks/:id/workspace', (req: Request, res: Response) => {
+    try {
+      const taskId = req.params.id as string;
+      const { workspaceId, name, icon, color } = req.body || {};
+      const tree = ensureTaskWorkspace(
+        { taskManager: ctx.taskManager, workspaceManager: ctx.workspaceManager, tabManager: ctx.tabManager },
+        taskId,
+        { workspaceId, name, icon, color }
+      );
+      if (!tree) return res.status(404).json({ error: 'Task not found' });
+      res.json(tree);
     } catch (e) {
       handleRouteError(res, e);
     }

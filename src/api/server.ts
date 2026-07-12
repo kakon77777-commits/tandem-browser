@@ -25,6 +25,8 @@ import { registerContentRoutes } from './routes/content';
 import { registerMediaRoutes } from './routes/media';
 import { registerMiscRoutes } from './routes/misc';
 import { registerHandoffRoutes } from './routes/handoffs';
+import { registerAnnotationRoutes } from './routes/annotations';
+import { registerStateTreeRoutes } from './routes/state-tree';
 import { registerSidebarRoutes } from './routes/sidebar';
 import { registerWorkspaceRoutes } from './routes/workspaces';
 import { registerSyncRoutes } from './routes/sync';
@@ -607,6 +609,8 @@ export class TandemAPI {
     registerMediaRoutes(router, ctx);
     registerMiscRoutes(router, ctx);
     registerHandoffRoutes(router, ctx);
+    registerAnnotationRoutes(router, ctx);
+    registerStateTreeRoutes(router, ctx);
     registerSidebarRoutes(router, ctx);
     registerWorkspaceRoutes(router, ctx);
     registerSyncRoutes(router, ctx);

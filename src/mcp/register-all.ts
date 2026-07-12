@@ -22,6 +22,8 @@ import { registerHistoryTools } from './tools/history.js';
 import { registerChatTools } from './tools/chat.js';
 import { registerTaskTools } from './tools/tasks.js';
 import { registerHandoffTools } from './tools/handoffs.js';
+import { registerAnnotationTools } from './tools/annotations.js';
+import { registerStateTreeTools } from './tools/state-tree.js';
 import { registerWorkflowTools } from './tools/workflows.js';
 import { registerExtensionTools } from './tools/extensions.js';
 import { registerDeviceTools } from './tools/devices.js';
@@ -59,6 +61,8 @@ export function registerAllTools(server: McpServer): void {
   registerChatTools(server);
   registerTaskTools(server);
   registerHandoffTools(server);
+  registerAnnotationTools(server);
+  registerStateTreeTools(server);
   registerWorkflowTools(server);
   registerExtensionTools(server);
   registerDeviceTools(server);

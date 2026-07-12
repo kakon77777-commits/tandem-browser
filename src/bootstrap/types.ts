@@ -50,6 +50,8 @@ import type { ClipboardManager } from '../clipboard/manager';
 import type { GooglePhotosManager } from '../integrations/google-photos';
 import type { PairingManager } from '../pairing/manager';
 import type { CloudflarePolicyManager } from '../cloudflare/policy-manager';
+import type { AnnotationManager } from '../annotations/manager';
+import type { StateTreeManager } from '../state-tree/manager';
 
 export interface RuntimeManagers {
   configManager: ConfigManager;
@@ -104,6 +106,8 @@ export interface RuntimeManagers {
   pairingManager: PairingManager;
   agentTrust: AgentTrustStore;
   cloudflarePolicyManager: CloudflarePolicyManager;
+  annotationManager: AnnotationManager;
+  stateTreeManager: StateTreeManager;
 }
 
 export interface PendingTabRegister {

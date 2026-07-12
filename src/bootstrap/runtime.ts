@@ -21,6 +21,8 @@ import { DownloadManager } from '../downloads/manager';
 import { EventStreamManager } from '../events/stream';
 import { getHandoffAttentionLevel } from '../handoffs/attention';
 import { HandoffManager, type Handoff } from '../handoffs/manager';
+import { AnnotationManager } from '../annotations/manager';
+import { StateTreeManager } from '../state-tree/manager';
 import type { Logger } from '../utils/logger';
 import { selectPlatform } from '../platform';
 import type { ManagerRegistry } from '../registry';
@@ -250,6 +252,8 @@ export async function initializeRuntimeManagers(opts: InitializeRuntimeOptions):
   runtime.eventStream = new EventStreamManager();
   runtime.handoffManager = new HandoffManager();
   runtime.taskManager = new TaskManager();
+  runtime.annotationManager = new AnnotationManager();
+  runtime.stateTreeManager = new StateTreeManager();
   runtime.agentTrust = new AgentTrustStore();
   // Load persisted T3 trusted domains from disk. Errors are logged
   // internally; a failure leaves the store in the empty state which is
@@ -465,6 +469,8 @@ export function createManagerRegistry(runtime: RuntimeManagers): ManagerRegistry
     eventStream: runtime.eventStream,
     handoffManager: runtime.handoffManager,
     taskManager: runtime.taskManager,
+    annotationManager: runtime.annotationManager,
+    stateTreeManager: runtime.stateTreeManager,
     taskHandoffCoordinator: runtime.taskHandoffCoordinator,
     tabLockManager: runtime.tabLockManager,
     devToolsManager: runtime.devToolsManager,
@@ -542,6 +548,8 @@ export function destroyRuntime(opts: DestroyRuntimeOptions): void {
   runtime.videoRecorderManager.forceStop();
   runtime.chromeImporter.destroy();
   runtime.taskManager.destroy();
+  runtime.annotationManager.destroy();
+  runtime.stateTreeManager.destroy();
   runtime.tabLockManager.destroy();
   runtime.contextMenuManager.destroy();
   runtime.devToolsManager.destroy();
