@@ -143,7 +143,12 @@ import { escapeHtml } from './util.js';
 
       // Wide toggle button
       const toggleBtn = document.getElementById('sidebar-toggle-width');
-      const toggleLabel = getConfig().state === 'wide' ? 'Collapse' : 'Expand';
+      // Translated once here (not just dict-matched) because toggleBtn.title
+      // below is a property write on an already-existing element, which the
+      // MutationObserver never sees — the innerHTML use downstream just
+      // inherits the already-translated text.
+      const toggleLabelRaw = getConfig().state === 'wide' ? 'Collapse' : 'Expand';
+      const toggleLabel = window.TandemI18n?.t(toggleLabelRaw) ?? toggleLabelRaw;
       toggleBtn.innerHTML = (getConfig().state === 'wide' ? '\u2039' : '\u203a') + `<span class="sidebar-footer-label">${toggleLabel}</span>`;
       toggleBtn.title = toggleLabel;
     }

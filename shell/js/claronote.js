@@ -348,6 +348,11 @@
         border: 1px solid rgba(255,255,255,0.1);
       `;
 
+      const noteDurationValue = `${Math.floor(note.duration / 60)}:${(note.duration % 60).toString().padStart(2, '0')}`;
+      const noteDurationText = window.TandemI18n?.t('Duration: {value}', { value: noteDurationValue }) ?? `Duration: ${noteDurationValue}`;
+      const noteDateValue = new Date(note.createdAt).toLocaleString('en-GB');
+      const noteDateText = window.TandemI18n?.t('Date: {value}', { value: noteDateValue }) ?? `Date: ${noteDateValue}`;
+
       content.innerHTML = `
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:15px;">
           <h3 style="margin:0;color:var(--text);">${escapeHtml(note.title || 'Note')}</h3>
@@ -356,8 +361,8 @@
         </div>
 
         <div style="margin-bottom:15px;font-size:11px;color:var(--text-dim);display:flex;gap:12px;">
-          <span>Duration: ${Math.floor(note.duration / 60)}:${(note.duration % 60).toString().padStart(2, '0')}</span>
-          <span>Date: ${new Date(note.createdAt).toLocaleString('en-GB')}</span>
+          <span>${noteDurationText}</span>
+          <span>${noteDateText}</span>
         </div>
 
         ${note.summary ? `

@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { IpcChannels } from '../shared/ipc-channels';
 import { applyInitialTheme } from './theme';
+import { applyInitialLocale } from './locale';
 import { createNavigationApi } from './navigation';
 import { createContentApi } from './content';
 import { createTabsApi } from './tabs';
@@ -14,8 +15,9 @@ import { createExtensionsApi } from './extensions';
 import { createWorkspacesApi } from './workspaces';
 import { createWindowApi } from './window';
 
-// Stamp the pre-paint theme on <html> before the shell document renders.
+// Stamp the pre-paint theme and locale on <html> before the shell document renders.
 applyInitialTheme();
+applyInitialLocale();
 
 contextBridge.exposeInMainWorld('__TANDEM_TOKEN__', '');
 contextBridge.exposeInMainWorld('__TANDEM_VERSION__', process.env.npm_package_version || '');

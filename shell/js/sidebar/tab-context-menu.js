@@ -288,7 +288,11 @@ export async function showTabContextMenu(domTabId, x, y) {
     const tabEmojiSpan = tabEl ? tabEl.querySelector('.tab-emoji') : null;
     const currentEmoji = (tabEmojiSpan && tabEmojiSpan.style.display !== 'none') ? tabEmojiSpan.textContent : '';
     const emojiLabel = document.createElement('span');
-    emojiLabel.textContent = currentEmoji ? ('Emoji: ' + currentEmoji) : 'Set Emoji...';
+    // Fused with the live emoji value, so the exact text never recurs
+    // verbatim for the dict to match — only the fixed prefix is translatable.
+    emojiLabel.textContent = currentEmoji
+      ? ((window.TandemI18n?.t('Emoji: ') ?? 'Emoji: ') + currentEmoji)
+      : 'Set Emoji...';
     const emojiArrow = document.createElement('span');
     emojiArrow.className = 'ctx-arrow';
     emojiArrow.textContent = '▶';

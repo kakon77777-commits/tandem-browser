@@ -170,7 +170,7 @@ function refreshBmList() {
       const id = btn.dataset.id;
       const item = btn.closest('.bm-item');
       const name = item.dataset.name;
-      if (!confirm(`Delete "${name}"?`)) return;
+      if (!confirm(window.TandemI18n?.t('Delete "{name}"?', { name }) ?? `Delete "${name}"?`)) return;
       try { await bookmarksStore.remove(id); } catch { /* ignore */ }
     });
   });

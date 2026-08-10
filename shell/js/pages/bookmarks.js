@@ -107,7 +107,8 @@ function buildFolderRow(item) {
   name.textContent = item.name || '';
   const count = document.createElement('div');
   count.className = 'bm-url';
-  count.textContent = `${item.children ? item.children.length : 0} items`;
+  const itemCount = item.children ? item.children.length : 0;
+  count.textContent = window.TandemI18n?.t('{count} items', { count: itemCount }) ?? `${itemCount} items`;
   info.append(name, count);
 
   el.append(icon, info, buildActions(item));
@@ -270,7 +271,9 @@ function renderList() {
     // Delete button
     el.querySelector('.delete')?.addEventListener('click', async (e) => {
       e.stopPropagation();
-      if (confirm(`Delete "${item.name}"?`)) {
+      const confirmMsg =
+        window.TandemI18n?.t('Delete "{name}"?', { name: item.name }) ?? `Delete "${item.name}"?`;
+      if (confirm(confirmMsg)) {
         await fetch(`${API}/bookmarks/remove`, {
           method: 'DELETE',
           headers: { 'Content-Type': 'application/json' },
@@ -406,13 +409,16 @@ document.getElementById('btn-import-chrome').addEventListener('click', async () 
     const res = await fetch(`${API}/import/chrome/bookmarks`, { method: 'POST' });
     const data = await res.json();
     if (data.ok) {
-      alert(`${data.count} bookmarks imported!`);
+      alert(window.TandemI18n?.t('{count} bookmarks imported!', { count: data.count }) ?? `${data.count} bookmarks imported!`);
       fetchBookmarks();
     } else {
-      alert('Import failed: ' + (data.error || 'Unknown error'));
+      const prefix = window.TandemI18n?.t('Import failed: ') ?? 'Import failed: ';
+      const reason = data.error ? data.error : (window.TandemI18n?.t('Unknown error') ?? 'Unknown error');
+      alert(prefix + reason);
     }
   } catch (e) {
-    alert('Import failed: ' + e.message);
+    const prefix = window.TandemI18n?.t('Import failed: ') ?? 'Import failed: ';
+    alert(prefix + e.message);
   }
   btn.textContent = 'Chrome Import';
   btn.disabled = false;

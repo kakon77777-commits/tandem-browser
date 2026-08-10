@@ -76,7 +76,11 @@ function pbWirePreviewFallbacks(container) {
 function pbReportError(action, err) {
   console.error(`[pinboard] ${action} failed`, err);
   const msg = (err && err.message) ? err.message : 'unknown error';
-  alert(`Pinboard: ${action} failed — ${msg}`);
+  // action is always one of the hardcoded English phrases below (e.g. 'rename
+  // board'), so it's dict-lookup-safe; msg may be a raw server/HTTP error and
+  // is passed through untranslated.
+  const translatedAction = window.TandemI18n?.t(action) ?? action;
+  alert(window.TandemI18n?.t('Pinboard: {action} failed — {msg}', { action: translatedAction, msg }) ?? `Pinboard: ${action} failed — ${msg}`);
 }
 
 export async function loadPinboardPanel() {
@@ -662,6 +666,14 @@ function pbRenderItems(items) {
     const title = pbEscape(item.title || item.url || (item.content ? item.content.substring(0, 50) : '') || 'Untitled');
     const date = new Date(item.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     const typeIcons = { link: '🔗', image: '🖼️', text: '📝', quote: '💬' };
+    // Icon + label share one text node ("🔗 link"), so the dict can't match
+    // the bare type word alone — translate it here before it's embedded.
+    const typeLabels = {
+      link: window.TandemI18n?.t('Link') ?? 'Link',
+      image: window.TandemI18n?.t('Image') ?? 'Image',
+      text: window.TandemI18n?.t('Text') ?? 'Text',
+      quote: window.TandemI18n?.t('Quote') ?? 'Quote',
+    };
 
     let preview;
     switch (item.type) {
@@ -702,7 +714,7 @@ function pbRenderItems(items) {
           ${item.description ? `<div class="pb-card-desc">${pbEscape(item.description.substring(0, 120))}</div>` : ''}
           ${item.note ? `<div class="pb-card-note">${pbEscape(item.note)}</div>` : ''}
           <div class="pb-card-meta">
-            <span class="pb-card-type">${typeIcons[item.type] || ''} ${pbEscape(item.type)}</span>
+            <span class="pb-card-type">${typeIcons[item.type] || ''} ${pbEscape(typeLabels[item.type] || item.type)}</span>
             <span class="pb-card-date">${date}</span>
           </div>
         </div>
