@@ -46,6 +46,7 @@ import { isGoogleAuthUrl, shouldSkipStealth, pathnameMatchesPrefix, tryParseUrl,
 import { readConfigFileSync, readConfiguredApiPortSync } from './config/io';
 import { buildApiPortArg, buildLocalApiBaseUrl } from './config/api-endpoints';
 import { resolveInitialTheme, buildThemeAdditionalArg, toNativeThemeSource, type ResolvedTheme } from './theme/resolver';
+import { resolveInitialLocale, buildLocaleAdditionalArg } from './locale/resolver';
 import { selectPlatform } from './platform';
 import { CloudflarePolicyManager } from './cloudflare/policy-manager';
 import {
@@ -828,6 +829,17 @@ async function createWindow(): Promise<BrowserWindow> {
     log.warn('[Theme] Could not resolve initial theme, defaulting to dark', err);
   }
 
+  // Pre-paint locale resolution — mirrors the theme resolution above so the
+  // shell's <html lang> is correct before first paint (see src/preload/locale.ts).
+  let initialLocale = resolveInitialLocale('en-US');
+  try {
+    const cfg = readConfigFileSync();
+    initialLocale = resolveInitialLocale(cfg?.general?.language ?? 'en-US');
+    log.info(`[Locale] Pre-paint resolved locale: ${initialLocale}`);
+  } catch (err) {
+    log.warn('[Locale] Could not resolve initial locale, defaulting to en-US', err);
+  }
+
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -840,7 +852,11 @@ async function createWindow(): Promise<BrowserWindow> {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      additionalArguments: [buildThemeAdditionalArg(initialTheme), buildApiPortArg(currentApiPort)],
+      additionalArguments: [
+        buildThemeAdditionalArg(initialTheme),
+        buildApiPortArg(currentApiPort),
+        buildLocaleAdditionalArg(initialLocale),
+      ],
     },
   });
   setMainWindow(mainWindow);

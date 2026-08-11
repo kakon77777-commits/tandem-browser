@@ -39,7 +39,7 @@ function applyConfigToUI() {
   // Appearance/Theme
   setVal('cfg-theme', a.theme || 'dark');
   window.TandemTheme.applyTheme(a.theme || 'dark');
-  setVal('cfg-language', g.language || 'nl-BE');
+  setVal('cfg-language', g.language || 'en-US');
   setVal('cfg-wingmanPanelPosition', g.wingmanPanelPosition || 'right');
   setChecked('cfg-wingmanPanelDefaultOpen', !!g.wingmanPanelDefaultOpen);
   setChecked('cfg-showBookmarksBar', g.showBookmarksBar !== false);
@@ -545,6 +545,18 @@ document.getElementById('cfg-theme').addEventListener('change', (e) => {
   } catch {}
 });
 
+// Handle language changes — same pattern as theme above: apply locally via
+// the shared i18n module, then broadcast to all other renderer windows.
+document.getElementById('cfg-language').addEventListener('change', (e) => {
+  const locale = e.target.value;
+  window.TandemI18n?.applyLocale(locale);
+  try {
+    const bc = new BroadcastChannel('tandem-locale');
+    bc.postMessage({ locale });
+    bc.close();
+  } catch {}
+});
+
 // ═══ Chrome sync ═══
 // Show/hide profile selector when sync toggled
 document.getElementById('cfg-chromeBookmarks').addEventListener('change', (e) => {
@@ -570,7 +582,7 @@ async function loadChromeProfiles() {
         for (const p of data.profiles) {
           const opt = document.createElement('option');
           opt.value = p.path;
-          opt.textContent = p.name + (p.hasBookmarks ? '' : ' (no bookmarks)');
+          opt.textContent = p.name + (p.hasBookmarks ? '' : (window.TandemI18n?.t(' (no bookmarks)') ?? ' (no bookmarks)'));
           select.appendChild(opt);
         }
       } else {
@@ -592,7 +604,8 @@ async function updateSyncStatus() {
       const data = await res.json();
       const statusEl = document.getElementById('sync-status-text');
       if (data.syncing) {
-        statusEl.textContent = `Active — syncing with ${data.profile || 'Chrome'}`;
+        const profile = data.profile || 'Chrome';
+        statusEl.textContent = window.TandemI18n?.t('Active — syncing with {profile}', { profile }) ?? `Active — syncing with ${profile}`;
         statusEl.style.color = 'var(--success)';
       } else {
         statusEl.textContent = 'Not active';
@@ -608,7 +621,8 @@ document.getElementById('btn-syncNow').addEventListener('click', async () => {
     const res = await fetch(`${API}/import/chrome/bookmarks`, { method: 'POST' });
     if (res.ok) {
       const data = await res.json();
-      showToast(`${data.count || 0} bookmarks synced ✓`);
+      const count = data.count || 0;
+      showToast(window.TandemI18n?.t('{count} bookmarks synced ✓', { count }) ?? `${count} bookmarks synced ✓`);
     } else {
       showToast('Sync failed ✕');
     }
@@ -744,7 +758,10 @@ async function loadExtInstalled() {
       let updateBadge = '';
       const updateInfo = updateStatusCache[diskId];
       if (updateInfo && updateInfo.updateAvailable) {
-        updateBadge = `<span class="ext-badge ext-badge-update">Update: v${esc(version)} → v${esc(updateInfo.latestKnownVersion)}</span>`;
+        const updateLabel = window.TandemI18n?.t('Update: v{oldVersion} → v{newVersion}', {
+          oldVersion: esc(version), newVersion: esc(updateInfo.latestKnownVersion),
+        }) ?? `Update: v${esc(version)} → v${esc(updateInfo.latestKnownVersion)}`;
+        updateBadge = `<span class="ext-badge ext-badge-update">${updateLabel}</span>`;
       }
 
       const card = document.createElement('div');
@@ -781,7 +798,11 @@ async function loadExtInstalled() {
           });
           const data = await res.json();
           if (data.results && data.results[0] && data.results[0].success) {
-            showToast(`Updated ${data.results[0].name}: v${data.results[0].previousVersion} → v${data.results[0].newVersion}`);
+            const r0 = data.results[0];
+            const msg = window.TandemI18n?.t('Updated {name}: v{oldVersion} → v{newVersion}', {
+              name: r0.name, oldVersion: r0.previousVersion, newVersion: r0.newVersion,
+            }) ?? `Updated ${r0.name}: v${r0.previousVersion} → v${r0.newVersion}`;
+            showToast(msg);
             delete updateStatusCache[id];
             loadExtInstalled();
           } else {
@@ -802,7 +823,9 @@ async function loadExtInstalled() {
     container.querySelectorAll('.ext-remove-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const id = btn.dataset.id;
-        showModal('Remove extension?', `This will uninstall "${id}" and remove its files.`, async () => {
+        const removeMsg = window.TandemI18n?.t('This will uninstall "{id}" and remove its files.', { id })
+          ?? `This will uninstall "${id}" and remove its files.`;
+        showModal(window.TandemI18n?.t('Remove extension?') ?? 'Remove extension?', removeMsg, async () => {
           btn.disabled = true;
           btn.textContent = 'Removing...';
           try {
@@ -845,15 +868,18 @@ async function loadUpdateStatus() {
     // Update tab badge
     const installedTab = document.querySelector('#ext-tabs button[data-tab="ext-installed"]');
     if (installedTab) {
-      installedTab.textContent = updatesAvailable > 0 ? `Installed (${updatesAvailable})` : 'Installed';
+      installedTab.textContent = updatesAvailable > 0
+        ? (window.TandemI18n?.t('Installed ({count})', { count: updatesAvailable }) ?? `Installed (${updatesAvailable})`)
+        : (window.TandemI18n?.t('Installed') ?? 'Installed');
     }
 
     if (updatesAvailable > 0) {
-      statusText.textContent = `${updatesAvailable} update${updatesAvailable > 1 ? 's' : ''} available`;
+      statusText.textContent = window.TandemI18n?.t('{count} updates available', { count: updatesAvailable })
+        ?? `${updatesAvailable} update${updatesAvailable > 1 ? 's' : ''} available`;
       updateAllBtn.style.display = '';
     } else if (data.lastCheck) {
       const ago = timeSince(new Date(data.lastCheck));
-      statusText.textContent = `All up to date (checked ${ago})`;
+      statusText.textContent = window.TandemI18n?.t('All up to date (checked {ago})', { ago }) ?? `All up to date (checked ${ago})`;
       updateAllBtn.style.display = 'none';
     } else {
       statusText.textContent = 'Updates not checked yet';
@@ -870,13 +896,14 @@ async function loadUpdateStatus() {
 
 function timeSince(date) {
   const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
-  if (seconds < 60) return 'just now';
+  const i18n = window.TandemI18n;
+  if (seconds < 60) return i18n?.t('just now') ?? 'just now';
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
+  if (minutes < 60) return i18n?.t('{minutes}m ago', { minutes }) ?? `${minutes}m ago`;
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
+  if (hours < 24) return i18n?.t('{hours}h ago', { hours }) ?? `${hours}h ago`;
   const days = Math.floor(hours / 24);
-  return `${days}d ago`;
+  return i18n?.t('{days}d ago', { days }) ?? `${days}d ago`;
 }
 
 // Wire Check for Updates button
@@ -901,9 +928,11 @@ document.getElementById('ext-check-updates-btn').addEventListener('click', async
       }
     }
     if (updatesAvailable > 0) {
-      showToast(`${updatesAvailable} update${updatesAvailable > 1 ? 's' : ''} available`);
+      showToast(window.TandemI18n?.t('{count} updates available', { count: updatesAvailable })
+        ?? `${updatesAvailable} update${updatesAvailable > 1 ? 's' : ''} available`);
     } else {
-      showToast(`All ${data.checked} extensions are up to date`);
+      showToast(window.TandemI18n?.t('All {count} extensions are up to date', { count: data.checked })
+        ?? `All ${data.checked} extensions are up to date`);
     }
     loadExtInstalled();
   } catch {
@@ -928,11 +957,16 @@ document.getElementById('ext-update-all-btn').addEventListener('click', async fu
     const success = results.filter(r => r.success).length;
     const failed = results.filter(r => !r.success).length;
     if (success > 0) {
-      showToast(`${success} extension${success > 1 ? 's' : ''} updated${failed > 0 ? `, ${failed} failed` : ''}`);
+      const msg = failed > 0
+        ? (window.TandemI18n?.t('{success} extensions updated, {failed} failed', { success, failed })
+            ?? `${success} extension${success > 1 ? 's' : ''} updated, ${failed} failed`)
+        : (window.TandemI18n?.t('{success} extensions updated', { success })
+            ?? `${success} extension${success > 1 ? 's' : ''} updated`);
+      showToast(msg);
     } else if (failed > 0) {
-      showToast(`${failed} update${failed > 1 ? 's' : ''} failed`);
+      showToast(window.TandemI18n?.t('{failed} updates failed', { failed }) ?? `${failed} update${failed > 1 ? 's' : ''} failed`);
     } else {
-      showToast('No updates to apply');
+      showToast(window.TandemI18n?.t('No updates to apply') ?? 'No updates to apply');
     }
     updateStatusCache = {};
     loadExtInstalled();
@@ -1024,7 +1058,10 @@ document.getElementById('ext-chrome-import-all').addEventListener('click', async
     });
     if (res.ok) {
       const data = await res.json();
-      showToast(`${data.imported || 0} imported, ${data.skipped || 0} skipped`);
+      const imported = data.imported || 0;
+      const skipped = data.skipped || 0;
+      showToast(window.TandemI18n?.t('{imported} imported, {skipped} skipped', { imported, skipped })
+        ?? `${imported} imported, ${skipped} skipped`);
       loadExtChrome();
     } else {
       showToast('Import failed');
@@ -1286,42 +1323,51 @@ function buildInstructionText(code, mode) {
   const addr = mode === 'local'
     ? (detectedAddresses ? detectedAddresses.local.address : `${API}`)
     : detectedAddresses.tailscale.address;
+  // .value on the instruction <textarea> is never seen by the DOM-scanning
+  // i18n engine (see shell/js/i18n.js) — every prose line here must be
+  // routed through t() explicitly. Lines that are literal API contract
+  // (HTTP verb/path, JSON request/response bodies) are left untranslated on
+  // purpose — they're meant to be copy-pasted verbatim by the receiving AI
+  // agent/HTTP client, and translating JSON key names would break them.
+  const t = (key, params) => window.TandemI18n?.t(key, params);
 
   if (mode === 'local') {
     return [
-      `Connect to Tandem Browser on this machine.`,
+      t('Connect to Tandem Browser on this machine.') ?? `Connect to Tandem Browser on this machine.`,
       ``,
-      `Tandem address: ${addr}`,
-      `Setup code: ${code}`,
+      t('Tandem address: {addr}', { addr }) ?? `Tandem address: ${addr}`,
+      t('Setup code: {code}', { code }) ?? `Setup code: ${code}`,
       ``,
-      `Read ${addr}/agent first. It explains how this Tandem instance works.`,
+      t('Read {addr}/agent first. It explains how this Tandem instance works.', { addr })
+        ?? `Read ${addr}/agent first. It explains how this Tandem instance works.`,
       ``,
-      `Then exchange the setup code for a connection token:`,
+      t('Then exchange the setup code for a connection token:') ?? `Then exchange the setup code for a connection token:`,
       `POST ${addr}/pairing/exchange`,
       `Body: { "code": "${code}", "machineId": "<your-machine-id>", "machineName": "<your-hostname>", "agentLabel": "<your-name>", "agentType": "<your-type>", "bindingKind": "local" }`,
       ``,
-      `Use the returned token as: Authorization: Bearer <token>`,
-      `Store it securely.`,
+      t('Use the returned token as: Authorization: Bearer <token>') ?? `Use the returned token as: Authorization: Bearer <token>`,
+      t('Store it securely.') ?? `Store it securely.`,
     ].join('\n');
   } else {
     return [
-      `Connect to Tandem Browser on another machine via Tailscale.`,
-      `Both machines must be on the same Tailscale network.`,
+      t('Connect to Tandem Browser on another machine via Tailscale.') ?? `Connect to Tandem Browser on another machine via Tailscale.`,
+      t('Both machines must be on the same Tailscale network.') ?? `Both machines must be on the same Tailscale network.`,
       ``,
-      `Tandem address: ${addr}`,
-      `Setup code: ${code}`,
+      t('Tandem address: {addr}', { addr }) ?? `Tandem address: ${addr}`,
+      t('Setup code: {code}', { code }) ?? `Setup code: ${code}`,
       ``,
-      `Read ${addr}/agent first. It explains how this Tandem instance works.`,
+      t('Read {addr}/agent first. It explains how this Tandem instance works.', { addr })
+        ?? `Read ${addr}/agent first. It explains how this Tandem instance works.`,
       ``,
-      `Then exchange the setup code for a connection token:`,
+      t('Then exchange the setup code for a connection token:') ?? `Then exchange the setup code for a connection token:`,
       `POST ${addr}/pairing/exchange`,
       `Body: { "code": "${code}", "machineId": "<your-machine-id>", "machineName": "<your-hostname>", "agentLabel": "<your-name>", "agentType": "<your-type>", "bindingKind": "remote", "transport": ["http", "mcp"] }`,
       ``,
-      `Use the returned token as: Authorization: Bearer <token>`,
-      `Store it securely.`,
+      t('Use the returned token as: Authorization: Bearer <token>') ?? `Use the returned token as: Authorization: Bearer <token>`,
+      t('Store it securely.') ?? `Store it securely.`,
       ``,
-      `MCP access (recommended for Claude Code, Cursor, etc.):`,
-      `After pairing, add this to your MCP client config:`,
+      t('MCP access (recommended for Claude Code, Cursor, etc.):') ?? `MCP access (recommended for Claude Code, Cursor, etc.):`,
+      t('After pairing, add this to your MCP client config:') ?? `After pairing, add this to your MCP client config:`,
       `{`,
       `  "mcpServers": {`,
       `    "tandem": {`,
@@ -1332,7 +1378,8 @@ function buildInstructionText(code, mode) {
       `  }`,
       `}`,
       ``,
-      `This connection works only over Tailscale. Tandem is not exposed to the public internet.`,
+      t('This connection works only over Tailscale. Tandem is not exposed to the public internet.')
+        ?? `This connection works only over Tailscale. Tandem is not exposed to the public internet.`,
     ].join('\n');
   }
 }
@@ -1363,8 +1410,9 @@ async function generateAndShowInstructions() {
       const m = Math.floor(remaining / 60);
       const s = remaining % 60;
       document.getElementById('agent-code-timer').textContent = remaining > 0
-        ? `Expires in ${m}:${s.toString().padStart(2, '0')}`
-        : 'Expired';
+        ? (window.TandemI18n?.t('Expires in {m}:{s}', { m, s: s.toString().padStart(2, '0') })
+            ?? `Expires in ${m}:${s.toString().padStart(2, '0')}`)
+        : (window.TandemI18n?.t('Expired') ?? 'Expired');
       if (remaining <= 0) {
         clearInterval(codeTimerInterval);
         cancelSetupCode();
@@ -1437,7 +1485,12 @@ function renderAgentBindings(bindings) {
 
     const statusColor = b.state === 'paired' ? 'var(--success)' : b.state === 'paused' ? 'var(--warning)' : 'var(--danger)';
     const statusDot = `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${statusColor};margin-right:6px"></span>`;
-    const lastUsed = b.lastUsedAt ? new Date(b.lastUsedAt).toLocaleString() : 'never';
+    const lastUsed = b.lastUsedAt
+      ? new Date(b.lastUsedAt).toLocaleString()
+      : (window.TandemI18n?.t('never') ?? 'never');
+    const metaLine = window.TandemI18n?.t('{machineName} · {agentType} · last used: {lastUsed}', {
+      machineName: esc(b.machineName), agentType: esc(b.agentType), lastUsed: esc(lastUsed),
+    }) ?? `${esc(b.machineName)} · ${esc(b.agentType)} · last used: ${esc(lastUsed)}`;
 
     // CSP forbids inline onclick handlers — buttons carry data attributes and
     // are wired below via addEventListener.
@@ -1445,7 +1498,7 @@ function renderAgentBindings(bindings) {
       <div>
         <div style="font-weight:500;font-size:14px">${statusDot}${esc(b.agentLabel)}</div>
         <div style="font-size:12px;color:var(--text-dim);margin-top:4px">
-          ${esc(b.machineName)} · ${esc(b.agentType)} · last used: ${esc(lastUsed)}
+          ${metaLine}
         </div>
       </div>
       <div style="display:flex;gap:6px">
@@ -1462,23 +1515,40 @@ function renderAgentBindings(bindings) {
   }
 }
 
+// English past-tense forms don't map onto Chinese verb morphology, so each
+// action gets its own explicit dict key rather than a `${action}d` suffix.
+const AGENT_ACTION_DONE_MSG = { pause: 'Agent paused', resume: 'Agent resumed', revoke: 'Agent revoked' };
+const AGENT_ACTION_FAIL_MSG = { pause: 'Failed to pause', resume: 'Failed to resume', revoke: 'Failed to revoke' };
+const AGENT_ACTION_CATCH_MSG = {
+  remove: 'Failed to remove agent',
+  pause: 'Failed to pause agent',
+  resume: 'Failed to resume agent',
+  revoke: 'Failed to revoke agent',
+};
+
 async function agentAction(id, action) {
   try {
     if (action === 'remove') {
       const res = await fetch(`${API}/pairing/bindings/${id}`, { method: 'DELETE' });
-      if (res.ok) { showToast('Agent removed'); loadAgentBindings(); }
+      if (res.ok) {
+        showToast(window.TandemI18n?.t('Agent removed') ?? 'Agent removed');
+        loadAgentBindings();
+      }
     } else {
       const res = await fetch(`${API}/pairing/bindings/${id}/${action}`, { method: 'POST' });
       if (res.ok) {
-        showToast(`Agent ${action}d`);
+        const fallback = AGENT_ACTION_DONE_MSG[action] || `Agent ${action}d`;
+        showToast(window.TandemI18n?.t(fallback) ?? fallback);
         loadAgentBindings();
       } else {
         const err = await res.json().catch(() => ({}));
-        showToast(err.error || `Failed to ${action}`);
+        const fallback = AGENT_ACTION_FAIL_MSG[action] || `Failed to ${action}`;
+        showToast(err.error || (window.TandemI18n?.t(fallback) ?? fallback));
       }
     }
   } catch {
-    showToast(`Failed to ${action} agent`);
+    const fallback = AGENT_ACTION_CATCH_MSG[action] || `Failed to ${action} agent`;
+    showToast(window.TandemI18n?.t(fallback) ?? fallback);
   }
 }
 

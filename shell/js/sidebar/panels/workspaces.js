@@ -83,7 +83,11 @@ function getNextWorkspaceName() {
   const existing = getWorkspaces().map(w => w.name);
   let n = 1;
   while (existing.includes(`Workspace ${n}`)) n++;
-  return `Workspace ${n}`;
+  // Translated once here; both the form's placeholder (built from a fresh
+  // call to this function) and the #ws-form-name input's .value (set from
+  // defaultName, which also calls this function) inherit the fix for free —
+  // neither consumer needs its own t() wrap.
+  return window.TandemI18n?.t('Workspace {n}', { n }) ?? `Workspace ${n}`;
 }
 
 function renderIconGrid(selectedIcon) {

@@ -57,10 +57,10 @@
       const isMaximized = await window.tandem.isWindowMaximized();
       if (isMaximized) {
         btnMaximize.innerHTML = '<svg viewBox="0 0 10 10"><path d="M2,2 L8,2 L8,8 L2,8 Z M3,3 L3,7 L7,7 L7,3 Z M3,1 L9,1 L9,7 M1,3 L1,9 L7,9" stroke="currentColor" fill="none" stroke-width="1" /></svg>';
-        btnMaximize.title = 'Restore';
+        btnMaximize.title = window.TandemI18n?.t('Restore') ?? 'Restore';
       } else {
         btnMaximize.innerHTML = '<svg viewBox="0 0 10 10"><path d="M0,0 L10,0 L10,10 L0,10 Z M1,1 L1,9 L9,9 L9,1 Z" /></svg>';
-        btnMaximize.title = 'Maximize';
+        btnMaximize.title = window.TandemI18n?.t('Maximize') ?? 'Maximize';
       }
     }
 

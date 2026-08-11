@@ -157,7 +157,8 @@
 
       // Listen for extension remove requests (from context menu)
       window.tandem.onExtensionRemoveRequest(async (data) => {
-        const confirmed = confirm(`Remove "${data.name}" from Tandem?`);
+        const confirmMsg = window.TandemI18n?.t('Remove "{name}" from Tandem?', { name: data.name }) ?? `Remove "${data.name}" from Tandem?`;
+        const confirmed = confirm(confirmMsg);
         if (!confirmed) return;
         try {
           const resp = await fetch(`http://localhost:8765/extensions/uninstall/${data.diskId || data.id}`, {

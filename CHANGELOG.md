@@ -495,6 +495,80 @@ Cloudflare human mode — phase 3. Challenge-sensitive tabs now run with reduced
 - **Stealth preload is mode-aware** — the per-frame preload now performs a synchronous IPC (`tandem:cloudflare-policy-sync`) to the main process before injecting, and chooses between `early` (Turnstile OOPIFs) and `full` (everything else) based on the returned disposition. Google auth and `file://` frames are still skipped entirely.
 - **DevTools attach logs include the `webContents` id** — every CDP attach, security-domain enable, and already-attached message now carries `wc <id>`, which makes diagnosing OOPIF-specific Cloudflare attach races possible from logs alone.
 
+### Added (Localization — fork-local, not upstreamed)
+
+- **zh-TW (Traditional Chinese) interface language, selectable in Settings**
+  (`src/locale/resolver.ts`, `src/preload/locale.ts`, `shell/js/i18n.js`,
+  `--tandem-locale=` startup argument, `general.language` config field,
+  Settings → General → Language) - built as a mirror of this repo's existing
+  theme (dark/light) mechanism end to end: config persists the choice,
+  `src/preload/locale.ts` stamps `<html lang>`/`data-tandem-initial-locale`
+  before paint on the main window (no flash of English), pages without
+  preload access (`<webview>`-hosted shell pages) pick it up from an async
+  `/config` fetch instead, and a `tandem-locale` `BroadcastChannel` applies
+  the change live in every open window the moment it's changed in Settings.
+- **`shell/js/i18n.js` translation engine** - rather than requiring a
+  `data-i18n="key"` attribute on every one of the ~700 hardcoded English UI
+  strings across the shell, this walks the DOM (mirroring
+  `shortcut-labels.js`'s existing TreeWalker technique for Cmd/Ctrl label
+  rewriting) and replaces exact-match English source strings with their
+  translation in text nodes and in `title`/`placeholder`/`aria-label`/`alt`/
+  `data-tip` attributes, backed by a `MutationObserver` so content injected
+  later by any shell script is translated automatically without that script
+  needing to call anything. `window.TandemI18n.t(key)` / `t(key, params)`
+  cover the remaining cases the DOM scan structurally can't reach: strings
+  fused with runtime data via template literals (`{count}`/`{name}`-style
+  placeholder substitution), `<input>`/`<textarea>` `.value`, attribute or
+  property writes on an element that already exists in the document (which
+  never produces a childList mutation for the observer to see), and native
+  `alert()`/`confirm()` dialogs. Untranslated strings are left as English,
+  so any surface can be localized incrementally without touching this file.
+  16 unit tests in `shell/tests/i18n.test.js`.
+- **zh-TW translation dictionary now totals 726 entries** across every shell
+  surface: the main window chrome (toolbar, sidebar, find bar, draw toolbar, onboarding,
+  password vault, Wingman panel, keyboard-shortcuts overlay), the full
+  Settings page (all 11 tabs, including the Connected Agents pairing flow's
+  copy-paste AI instruction block and every toast/confirm message), the
+  standalone Bookmarks-manager and New Tab pages, the Help page, the About
+  panel (both the standalone page and the extensions-sidebar variant), every
+  sidebar panel (bookmarks, history, pinboards, workspaces, tab context
+  menu), the Wingman chat and handoff/approval-card UI, and the extensions/
+  video-recorder/ClaroNote/window-chrome surfaces. Pre-existing non-English
+  source strings (a handful of leftover Dutch strings from before this fork)
+  were translated as found rather than "fixed" to English first. Verified
+  with real device/DOM-dump checks against the running app, not just unit
+  tests, for the surfaces translated in the prior session (main window,
+  Settings). `npx vitest run` (3132 tests) and `npx tsc --noEmit` are clean
+  repo-wide; `npx eslint` is clean for every file this pass touched (a
+  pre-existing `state-tree.js` lint error from the unrelated, still-uncommitted
+  Task/State Tree work is untouched, not introduced by this pass).
+- **Translation dictionary split one file per language** (`shell/js/i18n/zh-TW.js`,
+  new; `shell/js/i18n.js` now reads `window.__TANDEM_I18N_DICTS__` instead of
+  holding the dictionary inline) - decided after comparing this repo's needs
+  against two of the author's other multi-language properties (a 60-language
+  Astro/Workers site and a 40-language sibling): both key their dictionaries
+  on literal English source text too, same as Tandem's TreeWalker-matching
+  approach already did - the only structural gap was that Tandem nested every
+  locale in one shared object literal instead of one file per language. That
+  gap was concrete, not hypothetical: merging four parallel translation
+  passes into the old single-file dictionary earlier in this same pass
+  surfaced three real duplicate-key collisions that had to be found and fixed
+  by hand. Splitting by file removes that class of conflict entirely (each
+  language's file is independent) without touching the matching engine, the
+  key scheme, or any existing translation - `shell/js/i18n/zh-TW.js` is a
+  mechanical, verified-byte-identical extraction of the prior inline object.
+  Every shell HTML document now loads `js/i18n/zh-TW.js` before `js/i18n.js`.
+  Adding a second language going forward means one new file under
+  `shell/js/i18n/` plus one new `<script>` tag per HTML document - no changes
+  to `i18n.js` itself. **Semantic keys (e.g. `'action.cancel'` instead of the
+  English string) were considered and explicitly rejected**: neither
+  reference property uses them either, and Tandem's TreeWalker DOM-scan -
+  the mechanism that lets most strings need only a dictionary entry, no code
+  change - depends on the key being the literal on-screen English text: a
+  semantic-key dictionary can't drive it, and would mean reintroducing the
+  `data-i18n="key"` attribute-on-every-element approach this file's own
+  header comment already documents choosing not to do.
+
 ### Fixed
 
 - **Stealth crash inside Cloudflare Turnstile OOPIFs** — the full stealth script is no longer injected into `challenges.cloudflare.com` sub-frames; those frames now receive only the early variant, which resolves the V8 crash observed during Turnstile challenges.

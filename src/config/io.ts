@@ -16,6 +16,7 @@ import { tandemDir } from '../utils/paths';
 export interface PreStartupConfig {
   general?: {
     apiPort?: unknown;
+    language?: string;
   };
   appearance?: {
     theme?: 'dark' | 'light' | 'system';

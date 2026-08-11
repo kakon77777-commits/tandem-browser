@@ -146,6 +146,17 @@ export function initChat() {
     if (labelEl) labelEl.textContent = label;
   }
 
+  // Shared by updateBackendUI() and the onConnectionChange() handler below —
+  // both render the same "{name} Connected"/"{name} Disconnected" status
+  // text for whichever backend is currently active. `.textContent` writes
+  // are DOM-observer-safe, but the string is fused with backend.name so it
+  // never recurs verbatim in the dictionary — needs the t(key, params) form.
+  function backendConnectionText(name, connected) {
+    return connected
+      ? (window.TandemI18n?.t('{name} Connected', { name }) ?? `${name} Connected`)
+      : (window.TandemI18n?.t('{name} Disconnected', { name }) ?? `${name} Disconnected`);
+  }
+
   function updateBackendUI(activeId) {
     updateTandemChannelLabel();
     updateVisibleChannels();
@@ -169,21 +180,21 @@ export function initChat() {
       } else {
         wsStatusText.textContent = 'Wingman + Claude Disconnected';
       }
-      inputEl.placeholder = 'Message to Wingman & Claude... (@wingman/@claude for specific)';
+      inputEl.placeholder = window.TandemI18n?.t('Message to Wingman & Claude... (@wingman/@claude for specific)') ?? 'Message to Wingman & Claude... (@wingman/@claude for specific)';
     } else {
       // Single backend mode
       const backend = router.getActive();
       if (backend) {
         const connected = backend.isConnected();
         wsDot.style.background = connected ? 'var(--success)' : 'var(--accent)';
-        wsStatusText.textContent = connected ? `${backend.name} Connected` : `${backend.name} Disconnected`;
+        wsStatusText.textContent = backendConnectionText(backend.name, connected);
       }
       if (activeId === 'claude') {
-        inputEl.placeholder = 'Message to Claude...';
+        inputEl.placeholder = window.TandemI18n?.t('Message to Claude...') ?? 'Message to Claude...';
       } else if (activeId === 'tandem') {
-        inputEl.placeholder = 'Message to Tandem Wingman...';
+        inputEl.placeholder = window.TandemI18n?.t('Message to Tandem Wingman...') ?? 'Message to Tandem Wingman...';
       } else {
-        inputEl.placeholder = 'Message to Wingman...';
+        inputEl.placeholder = window.TandemI18n?.t('Message to Wingman...') ?? 'Message to Wingman...';
       }
     }
 
@@ -302,7 +313,7 @@ export function initChat() {
       const backend = router.getActive();
       const effectiveConnected = backend ? backend.isConnected() : connected;
       wsDot.style.background = effectiveConnected ? 'var(--success)' : 'var(--accent)';
-      wsStatusText.textContent = effectiveConnected ? `${backend.name} Connected` : `${backend.name} Disconnected`;
+      wsStatusText.textContent = backendConnectionText(backend.name, effectiveConnected);
     }
   });
 
@@ -328,7 +339,7 @@ export function initChat() {
     const typingText = typingEl.querySelector('span:last-child');
     if (typingText && typing) {
       const name = backendId === 'openclaw' ? 'Wingman' : 'Claude';
-      typingText.textContent = `${name} is typing...`;
+      typingText.textContent = window.TandemI18n?.t('{name} is typing...', { name }) ?? `${name} is typing...`;
     }
   });
 

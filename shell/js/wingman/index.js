@@ -140,7 +140,9 @@
         handoffCountEl.textContent = String(count);
       }
       if (activityTabButton) {
-        activityTabButton.textContent = count > 0 ? `Activity (${count})` : 'Activity';
+        activityTabButton.textContent = count > 0
+          ? (window.TandemI18n?.t('Activity ({count})', { count }) ?? `Activity (${count})`)
+          : 'Activity';
       }
     }
 
@@ -155,11 +157,18 @@
           ? (handoffAttentionEscalated ? 'escalated' : 'active')
           : 'pending';
 
+      // Chinese doesn't pluralize, so the translated dict only needs one
+      // template per branch (with/without a handoff title) regardless of
+      // count — the English fallback still branches on count === 1 to
+      // preserve the exact singular/plural wording (and the ':' vs ' — '
+      // separator) used before this string went through t().
       const baseTitle = count === 0
         ? null
-        : count === 1
-          ? `1 open handoff${topHandoff?.title ? `: ${topHandoff.title}` : ''}`
-          : `${count} open handoffs${topHandoff?.title ? ` — ${topHandoff.title}` : ''}`;
+        : topHandoff?.title
+          ? (window.TandemI18n?.t('{count} open handoffs: {title}', { count, title: topHandoff.title })
+            ?? (count === 1 ? `1 open handoff: ${topHandoff.title}` : `${count} open handoffs — ${topHandoff.title}`))
+          : (window.TandemI18n?.t('{count} open handoffs', { count })
+            ?? (count === 1 ? '1 open handoff' : `${count} open handoffs`));
 
       for (const element of [wingmanBadge, panelToggleBtn]) {
         if (!element) continue;
@@ -181,17 +190,21 @@
       }
 
       const badgeTitle = count === 0
-        ? 'Right-click for settings'
+        ? (window.TandemI18n?.t('Right-click for settings') ?? 'Right-click for settings')
         : isOpen
-          ? `${baseTitle}. Wingman panel is open.`
+          ? (window.TandemI18n?.t('{base}. Wingman panel is open.', { base: baseTitle }) ?? `${baseTitle}. Wingman panel is open.`)
           : closedState === 'escalated'
-            ? `${baseTitle}. Wingman is still waiting for you.`
+            ? (window.TandemI18n?.t('{base}. Wingman is still waiting for you.', { base: baseTitle }) ?? `${baseTitle}. Wingman is still waiting for you.`)
             : closedState === 'active'
-              ? `${baseTitle}. Wingman needs you.`
-              : `${baseTitle}. Open when you are ready.`;
+              ? (window.TandemI18n?.t('{base}. Wingman needs you.', { base: baseTitle }) ?? `${baseTitle}. Wingman needs you.`)
+              : (window.TandemI18n?.t('{base}. Open when you are ready.', { base: baseTitle }) ?? `${baseTitle}. Open when you are ready.`);
+      // .title writes bypass the DOM observer regardless of the dict/string
+      // fixes above (wingmanBadge/panelToggleBtn are pre-existing elements,
+      // see panel.js) — badgeTitle is already fully translated by this
+      // point, so these assignments just carry it through.
       wingmanBadge.title = badgeTitle;
       if (panelToggleBtn) {
-        panelToggleBtn.title = count === 0 ? 'Toggle Wingman panel' : badgeTitle;
+        panelToggleBtn.title = count === 0 ? (window.TandemI18n?.t('Toggle Wingman panel') ?? 'Toggle Wingman panel') : badgeTitle;
       }
     }
 
@@ -284,7 +297,7 @@
     wingmanBadge.addEventListener('mouseup', () => { clearTimeout(wingmanBadgePressTimer); });
     wingmanBadge.addEventListener('mouseleave', () => { clearTimeout(wingmanBadgePressTimer); });
     wingmanBadge.style.cursor = 'pointer';
-    wingmanBadge.title = 'Right-click for settings';
+    wingmanBadge.title = window.TandemI18n?.t('Right-click for settings') ?? 'Right-click for settings';
 
     if (window.tandem) {
       async function activateHandoff(handoffId) {
@@ -335,11 +348,17 @@
           const card = document.createElement('div');
           const statusClass = String(handoff.status || '').replace(/[^a-z0-9_-]/gi, '');
           card.className = `handoff-card status-${statusClass}`;
+          // Each label+value pair is fused into one string, so the exact
+          // text never recurs verbatim for the DOM scanner to match — build
+          // the translated string via t(key, params) first. The dynamic
+          // value is escaped BEFORE substitution (not after) so the label
+          // itself never needs re-escaping and untrusted handoff data can't
+          // reach innerHTML unescaped either way.
           const meta = [];
-          if (handoff.reason) meta.push(`<span class="handoff-pill">Reason: ${escapeHtml(handoff.reason)}</span>`);
-          if (handoff.workspaceName || handoff.workspaceId) meta.push(`<span class="handoff-pill">Workspace: ${escapeHtml(handoff.workspaceName || handoff.workspaceId)}</span>`);
-          if (handoff.tabTitle || handoff.tabId) meta.push(`<span class="handoff-pill">Tab: ${escapeHtml(handoff.tabTitle || handoff.tabId)}</span>`);
-          if (handoff.source || handoff.agentId) meta.push(`<span class="handoff-pill">Source: ${escapeHtml(handoff.source || handoff.agentId)}</span>`);
+          if (handoff.reason) meta.push(`<span class="handoff-pill">${window.TandemI18n?.t('Reason: {value}', { value: escapeHtml(handoff.reason) }) ?? `Reason: ${escapeHtml(handoff.reason)}`}</span>`);
+          if (handoff.workspaceName || handoff.workspaceId) meta.push(`<span class="handoff-pill">${window.TandemI18n?.t('Workspace: {value}', { value: escapeHtml(handoff.workspaceName || handoff.workspaceId) }) ?? `Workspace: ${escapeHtml(handoff.workspaceName || handoff.workspaceId)}`}</span>`);
+          if (handoff.tabTitle || handoff.tabId) meta.push(`<span class="handoff-pill">${window.TandemI18n?.t('Tab: {value}', { value: escapeHtml(handoff.tabTitle || handoff.tabId) }) ?? `Tab: ${escapeHtml(handoff.tabTitle || handoff.tabId)}`}</span>`);
+          if (handoff.source || handoff.agentId) meta.push(`<span class="handoff-pill">${window.TandemI18n?.t('Source: {value}', { value: escapeHtml(handoff.source || handoff.agentId) }) ?? `Source: ${escapeHtml(handoff.source || handoff.agentId)}`}</span>`);
           if (handoff.actionLabel) meta.push(`<span class="handoff-pill">${escapeHtml(handoff.actionLabel)}</span>`);
 
           const actionButtons = ['<button class="primary" data-action="open">Open Context</button>'];
@@ -477,7 +496,10 @@
         const icon = icons[event.type] || '•';
         const time = new Date(event.timestamp).toLocaleTimeString('nl-BE', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         let text = event.type;
-        if (event.type === 'handoff' && event.data.title) text = `handoff: ${event.data.title}${event.data.status ? ` (${event.data.status})` : ''}`;
+        if (event.type === 'handoff' && event.data.title) {
+          const handoffPrefix = window.TandemI18n?.t('handoff: ') ?? 'handoff: ';
+          text = `${handoffPrefix}${event.data.title}${event.data.status ? ` (${event.data.status})` : ''}`;
+        }
         else if (event.data.url) text = `${event.type}: ${event.data.url}`;
         else if (event.data.selector) text = `${event.type}: ${event.data.selector}`;
         else if (event.data.title) text = `${event.type}: ${event.data.title}`;
@@ -509,7 +531,8 @@
             if (sourceEl) {
               if (data.source && data.source !== 'user') {
                 sourceEl.textContent = '🤖';
-                sourceEl.title = `${data.source} controls this tab — click to take over`;
+                sourceEl.title = window.TandemI18n?.t('{source} controls this tab — click to take over', { source: data.source })
+                  ?? `${data.source} controls this tab — click to take over`;
                 sourceEl.style.display = '';
               } else {
                 sourceEl.textContent = '';

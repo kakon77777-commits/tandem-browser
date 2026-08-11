@@ -11,6 +11,8 @@
   <script src="js/api-base.js"></script>
   <script src="js/theme-stamp.js"></script>
   <script src="js/html-escape.js"></script>
+  <script src="js/i18n/zh-TW.js"></script>
+  <script src="js/i18n.js"></script>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Tandem — Settings</title>
@@ -543,13 +545,14 @@
         </div>
       </div>
 
-      <div class="field" style="opacity:0.45;pointer-events:none;">
+      <div class="field">
         <div class="field-info">
-          <div class="field-label">Language <span style="font-size:11px;color:#999;font-weight:normal;">— Coming soon</span></div>
-          <div class="field-desc">Interface and search language</div>
+          <div class="field-label">Language</div>
+          <div class="field-desc">Interface language</div>
         </div>
-        <select id="cfg-language" disabled>
+        <select id="cfg-language">
           <option value="en-US">English (US)</option>
+          <option value="zh-TW">繁體中文</option>
         </select>
       </div>
 
