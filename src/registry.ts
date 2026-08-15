@@ -55,6 +55,8 @@ import type { PairingManager } from './pairing/manager';
 import type { CloudflarePolicyManager } from './cloudflare/policy-manager';
 import type { AnnotationManager } from './annotations/manager';
 import type { StateTreeManager } from './state-tree/manager';
+import type { DecisionReceiptManager } from './agents/decision-receipts';
+import type { AgentRegistry } from './agents/agent-registry';
 
 export interface ManagerRegistry {
   /** Tab lifecycle, grouping, metadata, and focus tracking. See src/tabs/manager.ts */
@@ -159,4 +161,8 @@ export interface ManagerRegistry {
   annotationManager: AnnotationManager;
   /** Branching Browser State Tree (snapshot/fork/compare) instead of linear history. See src/state-tree/manager.ts */
   stateTreeManager: StateTreeManager;
+  /** Append-only log of real decisions (PMW invariant I6). See src/agents/decision-receipts.ts */
+  decisionReceiptManager: DecisionReceiptManager;
+  /** Identity record for every distinct human/AI actor (PMW's `agents` primitive). See src/agents/agent-registry.ts */
+  agentRegistry: AgentRegistry;
 }

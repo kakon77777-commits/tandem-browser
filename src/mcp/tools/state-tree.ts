@@ -41,6 +41,25 @@ export function registerStateTreeTools(server: McpServer): void {
   );
 
   server.tool(
+    'tandem_state_join',
+    'PMW JOIN operator: absorb another branch back into this one. Like tandem_state_fork, this re-observes ' +
+    'the current tab right now and records a new node — it does NOT algorithmically merge the two branches\' ' +
+    'stored content, so reconcile them on the live page yourself first. The new node is reachable as a ' +
+    'child from BOTH the branch it continues (id) and the branch it absorbs (joinedFromId).',
+    coerceShape({
+      id: z.string().describe('The state node ID to join into (becomes the new node\'s primary parent)'),
+      joinedFromId: z.string().describe('The other branch\'s state node ID being absorbed'),
+      tabId: z.string().optional().describe('Tab ID to capture (defaults to the active tab)'),
+      label: z.string().optional().describe('Label for the joined node, e.g. "reconciled layout"'),
+    }),
+    async ({ id, joinedFromId, tabId, label }) => {
+      const node = await apiCall('POST', `/state-tree/${encodeURIComponent(id)}/join`, { joinedFromId, label }, tabHeaders(tabId));
+      await logActivity('state_join', `${id} + ${joinedFromId} -> ${node?.id ?? ''}`);
+      return { content: [{ type: 'text', text: JSON.stringify(node, null, 2) }] };
+    }
+  );
+
+  server.tool(
     'tandem_state_list',
     'List Browser State Tree nodes, optionally filtered by task or tab, or roots only.',
     coerceShape({

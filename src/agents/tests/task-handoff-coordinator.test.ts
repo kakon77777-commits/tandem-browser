@@ -45,6 +45,15 @@ describe('TaskHandoffCoordinator', () => {
     findOpenByTaskStep: vi.fn(),
     create: vi.fn(),
     update: vi.fn(),
+    accept: vi.fn(),
+    get: vi.fn(),
+  } as any;
+
+  const decisionReceiptManager = {
+    record: vi.fn(),
+  } as any;
+
+  const agentRegistry = {
     get: vi.fn(),
   } as any;
 
@@ -52,7 +61,7 @@ describe('TaskHandoffCoordinator', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    coordinator = new TaskHandoffCoordinator(taskManager, handoffManager);
+    coordinator = new TaskHandoffCoordinator(taskManager, handoffManager, decisionReceiptManager, agentRegistry);
   });
 
   it('creates approval handoffs and pauses the linked task step for approval', () => {
@@ -138,24 +147,88 @@ describe('TaskHandoffCoordinator', () => {
       body: 'Solve captcha\n\nHuman marked this task ready for the agent to resume.',
     });
     handoffManager.get.mockReturnValue(createHandoff());
-    handoffManager.update.mockReturnValue(updated);
+    handoffManager.accept.mockReturnValue(updated);
 
     const handoff = coordinator.markReady('handoff-1');
 
-    expect(handoffManager.update).toHaveBeenCalledWith('handoff-1', expect.objectContaining({
-      status: 'ready_to_resume',
-      open: true,
+    expect(handoffManager.accept).toHaveBeenCalledWith('handoff-1', expect.objectContaining({
       actionLabel: 'Resume agent',
-    }));
+    }), undefined, undefined);
     expect(taskManager.markTaskReadyToResume).toHaveBeenCalledWith('task-1', 'step-1', 'handoff-1');
     expect(handoff?.status).toBe('ready_to_resume');
   });
 
-  it('returns null when markReady cannot update the handoff', () => {
+  describe('markReady() — PMW invariant I4 (Authority Separation)', () => {
+    it('resolves an AI actor\'s kind from AgentRegistry and passes it with the linked step\'s risk', () => {
+      handoffManager.get.mockReturnValue(createHandoff());
+      handoffManager.accept.mockReturnValue(createHandoff({ status: 'ready_to_resume' }));
+      taskManager.getStep.mockReturnValue({ task: {}, step: { riskLevel: 'high' }, stepIndex: 0 });
+      agentRegistry.get.mockReturnValue({ id: 'gpt-agent', kind: 'ai' });
+
+      coordinator.markReady('handoff-1', 'gpt-agent');
+
+      expect(agentRegistry.get).toHaveBeenCalledWith('gpt-agent');
+      expect(handoffManager.accept).toHaveBeenCalledWith('handoff-1', expect.anything(), undefined, {
+        kind: 'ai',
+        riskLevel: 'high',
+      });
+    });
+
+    it('propagates InsufficientAuthorityError thrown by HandoffManager.accept() instead of swallowing it', () => {
+      handoffManager.get.mockReturnValue(createHandoff());
+      taskManager.getStep.mockReturnValue({ task: {}, step: { riskLevel: 'high' }, stepIndex: 0 });
+      agentRegistry.get.mockReturnValue({ id: 'gpt-agent', kind: 'ai' });
+      handoffManager.accept.mockImplementation(() => {
+        throw new Error('denied');
+      });
+
+      expect(() => coordinator.markReady('handoff-1', 'gpt-agent')).toThrow('denied');
+    });
+
+    it('treats "user" as kind human even when AgentRegistry has never seen it', () => {
+      handoffManager.get.mockReturnValue(createHandoff());
+      handoffManager.accept.mockReturnValue(createHandoff({ status: 'ready_to_resume' }));
+      taskManager.getStep.mockReturnValue({ task: {}, step: { riskLevel: 'high' }, stepIndex: 0 });
+      agentRegistry.get.mockReturnValue(null); // never touch()'d
+
+      coordinator.markReady('handoff-1', 'user');
+
+      expect(handoffManager.accept).toHaveBeenCalledWith('handoff-1', expect.anything(), undefined, {
+        kind: 'human',
+        riskLevel: 'high',
+      });
+    });
+
+    it('passes riskLevel null for a standalone handoff with no linked task step', () => {
+      handoffManager.get.mockReturnValue(createHandoff({ taskId: null, stepId: null }));
+      handoffManager.accept.mockReturnValue(createHandoff({ status: 'ready_to_resume' }));
+      agentRegistry.get.mockReturnValue({ id: 'gpt-agent', kind: 'ai' });
+
+      coordinator.markReady('handoff-1', 'gpt-agent');
+
+      expect(taskManager.getStep).not.toHaveBeenCalled();
+      expect(handoffManager.accept).toHaveBeenCalledWith('handoff-1', expect.anything(), undefined, {
+        kind: 'ai',
+        riskLevel: null,
+      });
+    });
+
+    it('does not resolve authority at all when actorId is omitted (backward compatible)', () => {
+      handoffManager.get.mockReturnValue(createHandoff());
+      handoffManager.accept.mockReturnValue(createHandoff({ status: 'ready_to_resume' }));
+
+      coordinator.markReady('handoff-1');
+
+      expect(agentRegistry.get).not.toHaveBeenCalled();
+      expect(handoffManager.accept).toHaveBeenCalledWith('handoff-1', expect.anything(), undefined, undefined);
+    });
+  });
+
+  it('returns null when markReady cannot find the handoff', () => {
     handoffManager.get.mockReturnValue(null);
-    handoffManager.update.mockReturnValue(null);
 
     expect(coordinator.markReady('handoff-missing')).toBeNull();
+    expect(handoffManager.accept).not.toHaveBeenCalled();
     expect(taskManager.markTaskReadyToResume).not.toHaveBeenCalled();
   });
 
@@ -215,7 +288,7 @@ describe('TaskHandoffCoordinator', () => {
   it('approves and rejects waiting handoffs through the linked task step', () => {
     const waiting = createHandoff({ status: 'waiting_approval', reason: 'approval_required' });
     handoffManager.get.mockReturnValue(waiting);
-    taskManager.getStep.mockReturnValue({ task: { id: 'task-1' }, step: { id: 'step-1' }, stepIndex: 0 });
+    taskManager.getStep.mockReturnValue({ task: { id: 'task-1' }, step: { id: 'step-1', riskLevel: 'high' }, stepIndex: 0 });
     handoffManager.get.mockReturnValueOnce(waiting).mockReturnValueOnce(waiting).mockReturnValueOnce(waiting).mockReturnValueOnce(waiting);
 
     coordinator.approve('handoff-1');
@@ -223,6 +296,18 @@ describe('TaskHandoffCoordinator', () => {
 
     expect(taskManager.respondToApproval).toHaveBeenNthCalledWith(1, 'task-1', 'step-1', true);
     expect(taskManager.respondToApproval).toHaveBeenNthCalledWith(2, 'task-1', 'step-1', false);
+
+    // PMW invariant I6: approve()/reject() are the public API + MCP surface
+    // (tandem_handoff_approve/reject) — they must record a receipt too, not
+    // just the desktop-UI-only handleApprovalResponse() path.
+    expect(decisionReceiptManager.record).toHaveBeenNthCalledWith(1, {
+      taskId: 'task-1', stepId: 'step-1', handoffId: 'handoff-1',
+      actor: 'user', decision: 'ACTION', riskLevel: 'high',
+    });
+    expect(decisionReceiptManager.record).toHaveBeenNthCalledWith(2, {
+      taskId: 'task-1', stepId: 'step-1', handoffId: 'handoff-1',
+      actor: 'user', decision: 'NO_ACTION', riskLevel: 'high',
+    });
   });
 
   it('approves and rejects standalone waiting handoffs by resolving them directly', () => {
@@ -269,6 +354,14 @@ describe('TaskHandoffCoordinator', () => {
       actionLabel: 'Rejected',
     }));
     expect(approved?.status).toBe('resolved');
+    expect(decisionReceiptManager.record).toHaveBeenNthCalledWith(1, {
+      taskId: null, stepId: null, handoffId: 'handoff-1',
+      actor: 'user', decision: 'ACTION', riskLevel: null,
+    });
+    expect(decisionReceiptManager.record).toHaveBeenNthCalledWith(2, {
+      taskId: null, stepId: null, handoffId: 'handoff-1',
+      actor: 'user', decision: 'NO_ACTION', riskLevel: null,
+    });
     expect(rejected?.status).toBe('resolved');
   });
 
@@ -303,7 +396,7 @@ describe('TaskHandoffCoordinator', () => {
 
   it('falls back to lookup by task/step when linked handoff id is stale', () => {
     const review = createHandoff({ id: 'handoff-review', status: 'completed_review' });
-    taskManager.getStep.mockReturnValue({ task: { id: 'task-1' }, step: { id: 'step-1', handoffId: 'handoff-stale' }, stepIndex: 0 });
+    taskManager.getStep.mockReturnValue({ task: { id: 'task-1' }, step: { id: 'step-1', handoffId: 'handoff-stale', riskLevel: 'high' }, stepIndex: 0 });
     handoffManager.get.mockReturnValue(null);
     handoffManager.findOpenByTaskStep.mockReturnValue(review);
     handoffManager.update.mockReturnValue(createHandoff({
@@ -321,6 +414,50 @@ describe('TaskHandoffCoordinator', () => {
     expect(found?.id).toBe('handoff-review');
   });
 
+  it('records a decision receipt (PMW invariant I6) on a successful approval response', () => {
+    const review = createHandoff({ id: 'handoff-review', status: 'completed_review' });
+    taskManager.getStep.mockReturnValue({ task: { id: 'task-1' }, step: { id: 'step-1', handoffId: 'handoff-stale', riskLevel: 'medium' }, stepIndex: 0 });
+    handoffManager.get.mockReturnValue(null);
+    handoffManager.findOpenByTaskStep.mockReturnValue(review);
+    handoffManager.update.mockReturnValue(createHandoff({ id: 'handoff-review', status: 'resolved', open: false }));
+
+    coordinator.handleApprovalResponse({ requestId: 'task-1:step-1', approved: true });
+
+    expect(decisionReceiptManager.record).toHaveBeenCalledWith({
+      taskId: 'task-1',
+      stepId: 'step-1',
+      handoffId: 'handoff-review',
+      actor: 'user',
+      decision: 'ACTION',
+      riskLevel: 'medium',
+    });
+  });
+
+  it('records decision NO_ACTION when the approval is rejected', () => {
+    const review = createHandoff({ id: 'handoff-review', status: 'completed_review' });
+    taskManager.getStep.mockReturnValue({ task: { id: 'task-1' }, step: { id: 'step-1', handoffId: 'handoff-stale', riskLevel: 'low' }, stepIndex: 0 });
+    handoffManager.get.mockReturnValue(null);
+    handoffManager.findOpenByTaskStep.mockReturnValue(review);
+    handoffManager.update.mockReturnValue(createHandoff({ id: 'handoff-review', status: 'resolved', open: false }));
+
+    coordinator.handleApprovalResponse({ requestId: 'task-1:step-1', approved: false });
+
+    expect(decisionReceiptManager.record).toHaveBeenCalledWith(expect.objectContaining({
+      decision: 'NO_ACTION',
+      riskLevel: 'low',
+    }));
+  });
+
+  it('does not record a receipt when the handoff update fails', () => {
+    taskManager.getStep.mockReturnValue({ task: { id: 'task-1' }, step: { id: 'step-1', handoffId: 'handoff-1' }, stepIndex: 0 });
+    handoffManager.get.mockReturnValue(createHandoff({ status: 'waiting_approval' }));
+    handoffManager.update.mockReturnValue(null);
+
+    coordinator.handleApprovalResponse({ requestId: 'task-1:step-1', approved: true });
+
+    expect(decisionReceiptManager.record).not.toHaveBeenCalled();
+  });
+
   it('returns null for invalid approval-response payloads or missing handoffs', () => {
     expect(coordinator.handleApprovalResponse({ requestId: 'task-only', approved: true })).toBeNull();
 
@@ -332,7 +469,7 @@ describe('TaskHandoffCoordinator', () => {
   it('returns null when approval-response cannot update the handoff', () => {
     const waiting = createHandoff({ status: 'waiting_approval', reason: 'approval_required' });
     taskManager.getStep.mockReturnValue({ task: { id: 'task-1' }, step: { id: 'step-1', handoffId: 'handoff-1' }, stepIndex: 0 });
-    handoffManager.get.mockReturnValueOnce(waiting).mockReturnValueOnce(null);
+    handoffManager.get.mockReturnValue(waiting);
     handoffManager.update.mockReturnValue(null);
 
     expect(coordinator.handleApprovalResponse({ requestId: 'task-1:step-1', approved: true })).toBeNull();

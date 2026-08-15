@@ -26,6 +26,8 @@ import { registerMediaRoutes } from './routes/media';
 import { registerMiscRoutes } from './routes/misc';
 import { registerHandoffRoutes } from './routes/handoffs';
 import { registerAnnotationRoutes } from './routes/annotations';
+import { registerDecisionReceiptRoutes } from './routes/decision-receipts';
+import { registerAgentRegistryRoutes } from './routes/agent-registry';
 import { registerStateTreeRoutes } from './routes/state-tree';
 import { registerSidebarRoutes } from './routes/sidebar';
 import { registerWorkspaceRoutes } from './routes/workspaces';
@@ -47,7 +49,7 @@ import { WatchLiveWebSocket } from '../watch/live-ws';
 import type { ExtensionRouteAccessDecision } from '../extensions/manager';
 import { createLogger } from '../utils/logger';
 import { createRateLimitMiddleware } from './rate-limit';
-import { McpHttpTransportManager } from '../mcp/http-transport';
+import { handleMcpRequest } from '../mcp/http-transport';
 
 const log = createLogger('TandemAPI');
 const PUBLIC_ROUTE_PATHS = new Set<string>([
@@ -139,7 +141,6 @@ export class TandemAPI {
   private app: express.Application;
   private server: http.Server | null = null;
   private watchLiveWebSocket: WatchLiveWebSocket | null = null;
-  private mcpTransportManager: McpHttpTransportManager;
   private win: BrowserWindow;
   private authToken: string;
   private port: number;
@@ -204,17 +205,8 @@ export class TandemAPI {
       res.status(decision.status).json(decision.body ?? { error: decision.reason });
     });
 
-    // MCP over Streamable HTTP — remote agents use POST/GET/DELETE /mcp
-    this.mcpTransportManager = new McpHttpTransportManager();
+    // MCP over Streamable HTTP (stateless, 2026-07-28 spec) — remote agents use POST /mcp
     this.mountMcpRoute();
-
-    // Close MCP sessions when a binding is paused/revoked
-    this.registry.pairingManager.on('binding-changed', () => {
-      // On any binding state change, we could track per-binding sessions.
-      // For simplicity, we don't map sessions to bindings — the auth middleware
-      // will reject the next request from a paused/revoked binding anyway.
-      // Active SSE streams will fail on the next heartbeat cycle.
-    });
 
     this.setupRoutes();
 
@@ -588,7 +580,7 @@ export class TandemAPI {
     // when we don't pass parsedBody, but Express already parsed it via express.json().
     // So we pass req.body as parsedBody.
     this.app.all('/mcp', (req: Request, res: Response) => {
-      void this.mcpTransportManager.handleRequest(req, res, req.body);
+      void handleMcpRequest(req, res, req.body);
     });
   }
 
@@ -610,6 +602,8 @@ export class TandemAPI {
     registerMiscRoutes(router, ctx);
     registerHandoffRoutes(router, ctx);
     registerAnnotationRoutes(router, ctx);
+    registerDecisionReceiptRoutes(router, ctx);
+    registerAgentRegistryRoutes(router, ctx);
     registerStateTreeRoutes(router, ctx);
     registerSidebarRoutes(router, ctx);
     registerWorkspaceRoutes(router, ctx);
@@ -638,7 +632,6 @@ export class TandemAPI {
             authorizeRequest: (req) => this.authorizeWatchLiveRequest(req),
           });
         }
-        this.mcpTransportManager.start();
         const addresses = detectApiAddresses({ apiPort: this.port, apiListenHost: listenHost });
         writeApiEndpointBootstrap({ apiPort: this.port, apiListenHost: listenHost, addresses });
         resolve();
@@ -660,7 +653,6 @@ export class TandemAPI {
   stop(): void {
     this.watchLiveWebSocket?.close();
     this.watchLiveWebSocket = null;
-    void this.mcpTransportManager.stop();
     this.server?.close();
   }
 }

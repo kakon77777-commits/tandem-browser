@@ -23,6 +23,8 @@ import { getHandoffAttentionLevel } from '../handoffs/attention';
 import { HandoffManager, type Handoff } from '../handoffs/manager';
 import { AnnotationManager } from '../annotations/manager';
 import { StateTreeManager } from '../state-tree/manager';
+import { DecisionReceiptManager } from '../agents/decision-receipts';
+import { AgentRegistry } from '../agents/agent-registry';
 import type { Logger } from '../utils/logger';
 import { selectPlatform } from '../platform';
 import type { ManagerRegistry } from '../registry';
@@ -254,13 +256,15 @@ export async function initializeRuntimeManagers(opts: InitializeRuntimeOptions):
   runtime.taskManager = new TaskManager();
   runtime.annotationManager = new AnnotationManager();
   runtime.stateTreeManager = new StateTreeManager();
+  runtime.decisionReceiptManager = new DecisionReceiptManager();
+  runtime.agentRegistry = new AgentRegistry();
   runtime.agentTrust = new AgentTrustStore();
   // Load persisted T3 trusted domains from disk. Errors are logged
   // internally; a failure leaves the store in the empty state which is
   // the safe default (every action returns to T1 modal).
   await runtime.agentTrust.load();
-  runtime.taskHandoffCoordinator = new TaskHandoffCoordinator(runtime.taskManager, runtime.handoffManager);
-  runtime.tabLockManager = new TabLockManager();
+  runtime.taskHandoffCoordinator = new TaskHandoffCoordinator(runtime.taskManager, runtime.handoffManager, runtime.decisionReceiptManager, runtime.agentRegistry);
+  runtime.tabLockManager = new TabLockManager(runtime.agentRegistry);
   runtime.devToolsManager = new DevToolsManager(runtime.tabManager);
   runtime.snapshotManager = new SnapshotManager(runtime.devToolsManager);
   runtime.networkMocker = new NetworkMocker(runtime.devToolsManager);
@@ -471,6 +475,8 @@ export function createManagerRegistry(runtime: RuntimeManagers): ManagerRegistry
     taskManager: runtime.taskManager,
     annotationManager: runtime.annotationManager,
     stateTreeManager: runtime.stateTreeManager,
+    decisionReceiptManager: runtime.decisionReceiptManager,
+    agentRegistry: runtime.agentRegistry,
     taskHandoffCoordinator: runtime.taskHandoffCoordinator,
     tabLockManager: runtime.tabLockManager,
     devToolsManager: runtime.devToolsManager,

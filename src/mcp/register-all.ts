@@ -23,6 +23,8 @@ import { registerChatTools } from './tools/chat.js';
 import { registerTaskTools } from './tools/tasks.js';
 import { registerHandoffTools } from './tools/handoffs.js';
 import { registerAnnotationTools } from './tools/annotations.js';
+import { registerDecisionReceiptTools } from './tools/decision-receipts.js';
+import { registerAgentRegistryTools } from './tools/agent-registry.js';
 import { registerStateTreeTools } from './tools/state-tree.js';
 import { registerWorkflowTools } from './tools/workflows.js';
 import { registerExtensionTools } from './tools/extensions.js';
@@ -62,6 +64,8 @@ export function registerAllTools(server: McpServer): void {
   registerTaskTools(server);
   registerHandoffTools(server);
   registerAnnotationTools(server);
+  registerDecisionReceiptTools(server);
+  registerAgentRegistryTools(server);
   registerStateTreeTools(server);
   registerWorkflowTools(server);
   registerExtensionTools(server);

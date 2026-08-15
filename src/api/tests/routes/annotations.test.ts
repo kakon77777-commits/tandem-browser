@@ -35,6 +35,8 @@ describe('Annotation Routes', () => {
         region: { x: 1, y: 2, width: 3, height: 4 },
         dom: null,
         message: '這裡太擠',
+        scope: undefined,
+        ownerAgent: null,
       });
     });
 
@@ -96,6 +98,32 @@ describe('Annotation Routes', () => {
     it('returns 404 for an unknown annotation', async () => {
       const res = await request(app).post('/annotations/missing/resolve');
       expect(res.status).toBe(404);
+    });
+  });
+
+  describe('POST /annotations/:id/promote', () => {
+    it('returns 404 for an unknown annotation', async () => {
+      const res = await request(app).post('/annotations/missing/promote');
+      expect(res.status).toBe(404);
+    });
+
+    it('returns 409 when the annotation is already SHARED', async () => {
+      vi.mocked(ctx.annotationManager.promote).mockImplementation(() => {
+        throw Object.assign(new Error('Cannot promote annotation ann-1 from scope "SHARED" (already shared)'), { name: 'InvalidScopePromotionError' });
+      });
+
+      const res = await request(app).post('/annotations/ann-1/promote');
+      expect(res.status).toBe(409);
+    });
+
+    it('returns the promoted annotation on success', async () => {
+      vi.mocked(ctx.annotationManager.promote).mockReturnValue({
+        id: 'ann-1', scope: 'SHARED', version: 2,
+      } as any);
+
+      const res = await request(app).post('/annotations/ann-1/promote');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ id: 'ann-1', scope: 'SHARED', version: 2 });
     });
   });
 

@@ -133,4 +133,113 @@ describe('AnnotationManager', () => {
     expect(manager.list()).toHaveLength(1);
     expect(manager.get('ann-good')).toMatchObject({ id: 'ann-good', message: 'ok' });
   });
+
+  describe('version (CAS)', () => {
+    it('create() starts at version 1, resolve() increments it', () => {
+      const manager = new AnnotationManager();
+      const created = manager.create({ region: { x: 0, y: 0, width: 1, height: 1 } });
+      expect(created.version).toBe(1);
+
+      const resolved = manager.resolve(created.id);
+      expect(resolved?.version).toBe(2);
+    });
+
+    it('resolve() with a matching expectedVersion succeeds', () => {
+      const manager = new AnnotationManager();
+      const created = manager.create({ region: { x: 0, y: 0, width: 1, height: 1 } });
+
+      const resolved = manager.resolve(created.id, created.version);
+      expect(resolved?.version).toBe(2);
+    });
+
+    it('resolve() with a stale expectedVersion throws VersionConflictError and does not write', () => {
+      const manager = new AnnotationManager();
+      const created = manager.create({ region: { x: 0, y: 0, width: 1, height: 1 } });
+      manager.resolve(created.id); // now version 2, resolvedAt set
+
+      const beforeSecondAttempt = manager.get(created.id)?.resolvedAt;
+      expect(() => manager.resolve(created.id, 1)).toThrow('Version conflict');
+      expect(manager.get(created.id)?.resolvedAt).toBe(beforeSecondAttempt);
+    });
+
+    it('resolve() without expectedVersion keeps last-write-wins behavior', () => {
+      const manager = new AnnotationManager();
+      const created = manager.create({ region: { x: 0, y: 0, width: 1, height: 1 } });
+      manager.resolve(created.id);
+
+      // No expectedVersion — resolving an already-resolved annotation again
+      // just bumps resolvedAt/version, no error (unchanged prior behavior).
+      const resolvedAgain = manager.resolve(created.id);
+      expect(resolvedAgain?.version).toBe(3);
+    });
+
+    it('sanitizes a pre-existing on-disk record with no version field as version 1', () => {
+      fsState.exists = true;
+      fsState.readText = JSON.stringify([
+        { id: 'legacy-1', region: { x: 0, y: 0, width: 1, height: 1 }, message: 'old', createdAt: 1, resolvedAt: null },
+      ]);
+
+      const manager = new AnnotationManager();
+      expect(manager.get('legacy-1')?.version).toBe(1);
+    });
+  });
+
+  describe('scope (PRIVATE/SHARED) and promote() — PMW SHARE operator', () => {
+    it('defaults to SHARED when scope is not given', () => {
+      const manager = new AnnotationManager();
+      const created = manager.create({ region: { x: 0, y: 0, width: 1, height: 1 } });
+      expect(created.scope).toBe('SHARED');
+    });
+
+    it('honors an explicit PRIVATE scope and ownerAgent on create', () => {
+      const manager = new AnnotationManager();
+      const created = manager.create({
+        region: { x: 0, y: 0, width: 1, height: 1 },
+        scope: 'PRIVATE',
+        ownerAgent: 'agent-1',
+      });
+      expect(created.scope).toBe('PRIVATE');
+      expect(created.ownerAgent).toBe('agent-1');
+    });
+
+    it('promote() transitions PRIVATE to SHARED and bumps version', () => {
+      const manager = new AnnotationManager();
+      const created = manager.create({ region: { x: 0, y: 0, width: 1, height: 1 }, scope: 'PRIVATE' });
+
+      const promoted = manager.promote(created.id);
+      expect(promoted.scope).toBe('SHARED');
+      expect(promoted.version).toBe(2);
+    });
+
+    it('promote() throws InvalidScopePromotionError when already SHARED', () => {
+      const manager = new AnnotationManager();
+      const created = manager.create({ region: { x: 0, y: 0, width: 1, height: 1 } }); // defaults SHARED
+
+      expect(() => manager.promote(created.id)).toThrow('Cannot promote annotation');
+    });
+
+    it('promote() throws for an unknown annotation id', () => {
+      const manager = new AnnotationManager();
+      expect(() => manager.promote('missing')).toThrow('not found');
+    });
+
+    it('promote() honors expectedVersion (CAS)', () => {
+      const manager = new AnnotationManager();
+      const created = manager.create({ region: { x: 0, y: 0, width: 1, height: 1 }, scope: 'PRIVATE' });
+      manager.resolve(created.id); // version now 2
+
+      expect(() => manager.promote(created.id, 1)).toThrow('Version conflict');
+    });
+
+    it('sanitizes a pre-existing on-disk record with no scope field as SHARED', () => {
+      fsState.exists = true;
+      fsState.readText = JSON.stringify([
+        { id: 'legacy-2', region: { x: 0, y: 0, width: 1, height: 1 }, message: 'old', createdAt: 1, resolvedAt: null },
+      ]);
+
+      const manager = new AnnotationManager();
+      expect(manager.get('legacy-2')?.scope).toBe('SHARED');
+      expect(manager.get('legacy-2')?.ownerAgent).toBeNull();
+    });
+  });
 });
