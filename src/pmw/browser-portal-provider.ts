@@ -1,4 +1,5 @@
 import type { Tab } from '../tabs/manager';
+import type { BrowserSurfaceSource } from './browser-surface-registry';
 
 export type BrowserPortalDisplayMode = 'snapshot' | 'live';
 
@@ -37,13 +38,15 @@ export interface TandemBrowserResourceDescriptor {
     loading: boolean;
     focused: boolean;
     visible: boolean;
-    legacyFocusVisibilityCoupled: true;
+    legacyFocusVisibilityCoupled: boolean;
+    surfaceRevision?: number;
   };
   projection: {
     preferredDisplayMode: BrowserPortalDisplayMode;
     previewUri: string;
     liveMountUri: string;
     liveMountKind: 'electron-webview';
+    rect?: { left: number; top: number; width: number; height: number };
   };
   capabilities: Array<'snapshot' | 'live' | 'navigate' | 'dom' | 'mcp' | 'session_state'>;
 }
@@ -77,11 +80,16 @@ function liveMountResourceUri(tabId: string): string {
  * Provider-neutral projection adapter for exposing Tandem browser tabs to a
  * Canvas-first PMW host. Tandem remains canonical for browser runtime state;
  * consumers receive stable descriptors and preview/live handles only.
+ *
+ * A BrowserSurfaceSource is optional for backward compatibility. Without one,
+ * the provider reports Tandem's legacy active==visible coupling. With one,
+ * projection visibility/focus/mode/geometry are independent of Tab.active.
  */
 export class TandemBrowserPortalProvider {
   constructor(
     private readonly tabs: BrowserPortalTabSource,
     private readonly workspaces?: BrowserPortalWorkspaceSource,
+    private readonly surfaces?: BrowserSurfaceSource,
   ) {}
 
   list(): TandemBrowserResourceDescriptor[] {
@@ -122,6 +130,7 @@ export class TandemBrowserPortalProvider {
   private describeTab(tab: Tab): TandemBrowserResourceDescriptor {
     const contents = this.tabs.getWebContents(tab.id);
     const mounted = Boolean(contents && !contents.isDestroyed());
+    const surface = this.surfaces?.getSurface(tab.id) ?? null;
     return {
       provider: 'tandem',
       resourceKind: 'browser_tab',
@@ -136,15 +145,17 @@ export class TandemBrowserPortalProvider {
       state: {
         mounted,
         loading: mounted ? Boolean(contents?.isLoading()) : false,
-        focused: tab.active,
-        visible: tab.active,
-        legacyFocusVisibilityCoupled: true,
+        focused: surface?.focused ?? tab.active,
+        visible: surface?.visible ?? tab.active,
+        legacyFocusVisibilityCoupled: surface === null,
+        ...(surface ? { surfaceRevision: surface.revision } : {}),
       },
       projection: {
-        preferredDisplayMode: 'snapshot',
+        preferredDisplayMode: surface?.mode ?? 'snapshot',
         previewUri: previewResourceUri(tab.id),
         liveMountUri: liveMountResourceUri(tab.id),
         liveMountKind: 'electron-webview',
+        ...(surface?.rect ? { rect: { ...surface.rect } } : {}),
       },
       capabilities: ['snapshot', 'live', 'navigate', 'dom', 'mcp', 'session_state'],
     };
