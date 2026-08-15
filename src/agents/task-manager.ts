@@ -15,6 +15,10 @@ import fs from 'fs';
 import { EventEmitter } from 'events';
 import { tandemDir, ensureDir } from '../utils/paths';
 import { assertSinglePathSegment, hostnameMatches, resolvePathWithinRoot, tryParseUrl } from '../utils/security';
+import { checkVersion } from '../utils/version-conflict';
+import { isScope, InvalidScopePromotionError, type Scope } from '../utils/scope';
+
+export { InvalidScopePromotionError } from '../utils/scope';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -36,6 +40,15 @@ export interface TaskStep {
   handoffId?: string;
   waitingOn?: StepWaitState;
   readyToResumeAt?: number;
+  /**
+   * PMW scoped-memory primitive (Private→Shared) — see src/utils/scope.ts.
+   * Defaults to SHARED (matches pre-existing behavior: every step was
+   * implicitly visible before this field existed). Promote via
+   * TaskManager.promoteStepScope() — the SHARE operator. NOT YET ENFORCED:
+   * nothing filters PRIVATE steps by caller today, same documented gap as
+   * AnnotationManager's scope field.
+   */
+  scope?: Scope;
 }
 
 export interface AITask {
@@ -52,6 +65,8 @@ export interface AITask {
   completedAt?: number;
   /** Workspace this task's browser work is scoped to (SRW task↔workspace mapping). See src/agents/task-tree.ts */
   workspaceId?: string;
+  /** Compare-and-set version, incremented on every saveTask(). See src/utils/version-conflict.ts. */
+  version: number;
 }
 
 export interface TaskActivityEntry {
@@ -198,6 +213,7 @@ export class TaskManager extends EventEmitter {
       results: [],
       createdAt: Date.now(),
       updatedAt: Date.now(),
+      version: 0, // saveTask() below unconditionally bumps this to 1 — see saveTask()
       ...(workspaceId ? { workspaceId } : {}),
     };
     this.saveTask(task);
@@ -219,7 +235,13 @@ export class TaskManager extends EventEmitter {
     try {
       const filePath = this.getTaskFilePath(id);
       if (fs.existsSync(filePath)) {
-        return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+        const task = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as AITask;
+        // Files written before `version` existed load as version 1 — the
+        // same value a fresh createTask() would have after its first save.
+        if (typeof task.version !== 'number' || !Number.isInteger(task.version) || task.version < 1) {
+          task.version = 1;
+        }
+        return task;
       }
     } catch { /* not found */ }
     return null;
@@ -466,9 +488,15 @@ export class TaskManager extends EventEmitter {
 
   // ── Task Execution Updates ──
 
-  updateStepStatus(taskId: string, stepIndex: number, status: StepStatus, result?: unknown): AITask | null {
+  /**
+   * @param expectedVersion - optional CAS guard. Omit for today's
+   * last-write-wins behavior; pass `task.version` to reject the write with
+   * VersionConflictError if something else updated the task first.
+   */
+  updateStepStatus(taskId: string, stepIndex: number, status: StepStatus, result?: unknown, expectedVersion?: number): AITask | null {
     const task = this.getTask(taskId);
     if (!task || !this.isValidStepIndex(task, stepIndex)) return null;
+    checkVersion(taskId, task.version, expectedVersion);
 
     const step = task.steps.at(stepIndex);
     if (!step) return null;
@@ -496,6 +524,37 @@ export class TaskManager extends EventEmitter {
       task.status = 'paused';
     }
 
+    this.saveTask(task);
+    this.emit('task-updated', task);
+    return task;
+  }
+
+  /**
+   * Promote a PRIVATE step to SHARED — the PMW SHARE operator, mirroring
+   * AnnotationManager.promote(). Throws InvalidScopePromotionError if the
+   * step is already SHARED (including a step with no `scope` set at all —
+   * absent scope means "implicitly shared", same as the default everywhere
+   * else this primitive is used).
+   *
+   * @param expectedVersion - optional CAS guard, see updateStepStatus()
+   */
+  promoteStepScope(taskId: string, stepIndex: number, expectedVersion?: number): AITask {
+    const task = this.getTask(taskId);
+    if (!task || !this.isValidStepIndex(task, stepIndex)) {
+      throw new Error(`Task ${taskId} step ${stepIndex} not found`);
+    }
+    checkVersion(taskId, task.version, expectedVersion);
+
+    const step = task.steps.at(stepIndex);
+    if (!step) {
+      throw new Error(`Task ${taskId} step ${stepIndex} not found`);
+    }
+    const currentScope: Scope = isScope(step.scope) ? step.scope : 'SHARED';
+    if (currentScope === 'SHARED') {
+      throw new InvalidScopePromotionError('task step', `${taskId}/${step.id}`, currentScope);
+    }
+
+    step.scope = 'SHARED';
     this.saveTask(task);
     this.emit('task-updated', task);
     return task;
@@ -621,6 +680,7 @@ export class TaskManager extends EventEmitter {
 
   private saveTask(task: AITask): void {
     task.updatedAt = Date.now();
+    task.version = (task.version || 0) + 1;
     try {
       fs.writeFileSync(
         this.getTaskFilePath(task.id),

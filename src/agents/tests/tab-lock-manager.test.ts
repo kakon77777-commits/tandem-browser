@@ -3,9 +3,29 @@ import { TabLockManager } from '../tab-lock-manager';
 
 describe('TabLockManager', () => {
   let lm: TabLockManager;
+  let agentRegistry: { touch: ReturnType<typeof vi.fn> };
 
   beforeEach(() => {
-    lm = new TabLockManager();
+    agentRegistry = { touch: vi.fn() };
+    lm = new TabLockManager(agentRegistry as any);
+  });
+
+  describe('agent registry integration (PMW ISOLATE operator)', () => {
+    it('touches the agent registry on every acquire() call', () => {
+      lm.acquire('tab-1', 'claude');
+      expect(agentRegistry.touch).toHaveBeenCalledWith('claude');
+
+      lm.acquire('tab-1', 'other-agent');
+      expect(agentRegistry.touch).toHaveBeenCalledWith('other-agent');
+    });
+
+    it('touches the registry even when the lock attempt fails', () => {
+      lm.acquire('tab-1', 'claude');
+      agentRegistry.touch.mockClear();
+
+      lm.acquire('tab-1', 'other-agent');
+      expect(agentRegistry.touch).toHaveBeenCalledWith('other-agent');
+    });
   });
 
   describe('acquire()', () => {

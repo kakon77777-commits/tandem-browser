@@ -97,4 +97,28 @@ describe('MCP annotation tools', () => {
     expect(mockApiCall).toHaveBeenCalledWith('POST', '/annotations/ann-1/resolve');
     expect(mockLogActivity).toHaveBeenCalledWith('annotation_resolve', 'ann-1');
   });
+
+  it('promotes a PRIVATE annotation to SHARED', async () => {
+    const handler = getHandler(tools, 'tandem_annotation_promote');
+    mockApiCall.mockResolvedValueOnce({ id: 'ann-1', scope: 'SHARED' });
+    mockLogActivity.mockResolvedValueOnce(undefined);
+
+    const result = await handler({ id: 'ann-1' });
+
+    expectTextContent(result, 'SHARED');
+    expect(mockApiCall).toHaveBeenCalledWith('POST', '/annotations/ann-1/promote');
+    expect(mockLogActivity).toHaveBeenCalledWith('annotation_promote', 'ann-1');
+  });
+
+  it('creates a PRIVATE annotation with an ownerAgent', async () => {
+    const handler = getHandler(tools, 'tandem_annotate');
+    mockApiCall.mockResolvedValueOnce({ id: 'ann-3', scope: 'PRIVATE', ownerAgent: 'agent-1' });
+
+    await handler({ tabId: 'tab-1', x: 0, y: 0, width: 1, height: 1, scope: 'PRIVATE', ownerAgent: 'agent-1' });
+
+    expect(mockApiCall).toHaveBeenCalledWith('POST', '/annotations', expect.objectContaining({
+      scope: 'PRIVATE',
+      ownerAgent: 'agent-1',
+    }));
+  });
 });

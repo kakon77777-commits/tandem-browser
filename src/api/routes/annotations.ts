@@ -3,6 +3,7 @@ import type { RouteContext } from '../context';
 import { handleRouteError } from '../../utils/errors';
 import { resolveDomAtRegion } from '../../annotations/dom-resolver';
 import type { AnnotationListFilters, AnnotationRegion } from '../../annotations/manager';
+import { isScope as isAnnotationScope } from '../../utils/scope';
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
@@ -46,7 +47,7 @@ export function registerAnnotationRoutes(router: Router, ctx: RouteContext): voi
 
   router.post('/annotations', async (req: Request, res: Response) => {
     try {
-      const { taskId, tabId, region: rawRegion, message } = req.body as Record<string, unknown>;
+      const { taskId, tabId, region: rawRegion, message, scope, ownerAgent } = req.body as Record<string, unknown>;
 
       const region = parseRegion(rawRegion);
       if (!region) {
@@ -59,6 +60,14 @@ export function registerAnnotationRoutes(router: Router, ctx: RouteContext): voi
       }
       if (message !== undefined && typeof message !== 'string') {
         res.status(400).json({ error: 'message must be a string when provided' });
+        return;
+      }
+      if (scope !== undefined && !isAnnotationScope(scope)) {
+        res.status(400).json({ error: 'scope must be "PRIVATE" or "SHARED" when provided' });
+        return;
+      }
+      if (ownerAgent !== undefined && typeof ownerAgent !== 'string') {
+        res.status(400).json({ error: 'ownerAgent must be a string when provided' });
         return;
       }
 
@@ -87,6 +96,8 @@ export function registerAnnotationRoutes(router: Router, ctx: RouteContext): voi
         region,
         dom,
         message: typeof message === 'string' ? message : '',
+        scope: isAnnotationScope(scope) ? scope : undefined,
+        ownerAgent: typeof ownerAgent === 'string' ? ownerAgent : null,
       });
 
       res.json(annotation);
@@ -104,6 +115,20 @@ export function registerAnnotationRoutes(router: Router, ctx: RouteContext): voi
       }
       res.json(annotation);
     } catch (e) {
+      handleRouteError(res, e);
+    }
+  });
+
+  /** PMW SHARE operator — promote a PRIVATE annotation to SHARED. */
+  router.post('/annotations/:id/promote', (req: Request, res: Response) => {
+    try {
+      const annotation = ctx.annotationManager.promote(req.params.id as string);
+      res.json(annotation);
+    } catch (e) {
+      if (e instanceof Error && e.message.includes('not found')) {
+        res.status(404).json({ error: 'Annotation not found' });
+        return;
+      }
       handleRouteError(res, e);
     }
   });

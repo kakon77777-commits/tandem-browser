@@ -52,6 +52,8 @@ import type { PairingManager } from '../pairing/manager';
 import type { CloudflarePolicyManager } from '../cloudflare/policy-manager';
 import type { AnnotationManager } from '../annotations/manager';
 import type { StateTreeManager } from '../state-tree/manager';
+import type { DecisionReceiptManager } from '../agents/decision-receipts';
+import type { AgentRegistry } from '../agents/agent-registry';
 
 export interface RuntimeManagers {
   configManager: ConfigManager;
@@ -108,6 +110,8 @@ export interface RuntimeManagers {
   cloudflarePolicyManager: CloudflarePolicyManager;
   annotationManager: AnnotationManager;
   stateTreeManager: StateTreeManager;
+  decisionReceiptManager: DecisionReceiptManager;
+  agentRegistry: AgentRegistry;
 }
 
 export interface PendingTabRegister {

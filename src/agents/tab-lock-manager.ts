@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events';
+import type { AgentRegistry } from './agent-registry';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -15,6 +16,9 @@ const DEFAULT_LOCK_TIMEOUT_MS = 60_000; // 60 seconds
 
 /**
  * TabLockManager — Prevents multiple agents from controlling the same tab.
+ * PMW's ISOLATE operator: exclusive ownership of a resource (here, a tab)
+ * by one agent at a time. Every acquire() touches the AgentRegistry so the
+ * agent claiming isolation is a real identity record, not just a string.
  */
 export class TabLockManager extends EventEmitter {
 
@@ -22,11 +26,13 @@ export class TabLockManager extends EventEmitter {
 
   private locks: Map<string, TabLock> = new Map();
   private lockTimeoutMs: number;
+  private agentRegistry: AgentRegistry;
 
   // === 2. Constructor ===
 
-  constructor(lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS) {
+  constructor(agentRegistry: AgentRegistry, lockTimeoutMs = DEFAULT_LOCK_TIMEOUT_MS) {
     super();
+    this.agentRegistry = agentRegistry;
     this.lockTimeoutMs = lockTimeoutMs;
   }
 
@@ -39,6 +45,7 @@ export class TabLockManager extends EventEmitter {
    */
   acquire(tabId: string, agentId: string): { acquired: boolean; owner?: string } {
     this.cleanExpired();
+    this.agentRegistry.touch(agentId);
 
     // User always has priority
     if (agentId === 'user') {

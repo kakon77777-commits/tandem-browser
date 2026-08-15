@@ -263,6 +263,37 @@ describe('Agent Routes', () => {
     });
   });
 
+  describe('POST /tasks/:id/steps/:stepIndex/promote', () => {
+    it('rejects a non-numeric stepIndex', async () => {
+      const res = await request(app).post('/tasks/task-1/steps/abc/promote');
+      expect(res.status).toBe(400);
+    });
+
+    it('returns 404 when the task/step is not found', async () => {
+      const res = await request(app).post('/tasks/task-1/steps/0/promote');
+      expect(res.status).toBe(404);
+    });
+
+    it('returns 409 when the step is already SHARED', async () => {
+      vi.mocked(ctx.taskManager.promoteStepScope).mockImplementation(() => {
+        throw Object.assign(new Error('Cannot promote task step task-1/task-1-step-0 from scope "SHARED" (already shared)'), { name: 'InvalidScopePromotionError' });
+      });
+
+      const res = await request(app).post('/tasks/task-1/steps/0/promote');
+      expect(res.status).toBe(409);
+    });
+
+    it('returns the updated task on success', async () => {
+      const fakeTask = { id: 'task-1', steps: [{ id: 'task-1-step-0', scope: 'SHARED' }] };
+      vi.mocked(ctx.taskManager.promoteStepScope).mockReturnValue(fakeTask as any);
+
+      const res = await request(app).post('/tasks/task-1/steps/0/promote');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual(fakeTask);
+      expect(ctx.taskManager.promoteStepScope).toHaveBeenCalledWith('task-1', 0);
+    });
+  });
+
   // ─── POST /emergency-stop ──────────────────────
 
   describe('POST /emergency-stop', () => {
