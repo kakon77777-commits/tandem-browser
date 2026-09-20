@@ -1,0 +1,62 @@
+schema_version: "0.1"
+activation: manual
+
+capabilities:
+  - id: capability.fetch_url
+    kind: access
+    description: Navigate to and retrieve URL-backed browser content.
+    methods: [method.fetch_document@1.0.0]
+  - id: capability.navigate
+    kind: access
+    description: Navigate an interactive browser session.
+  - id: capability.observe_text
+    kind: observation
+    description: Observe rendered page text.
+    modalities: [text]
+  - id: capability.observe_structured
+    kind: observation
+    description: Observe structured browser/page state.
+    modalities: [structured]
+  - id: capability.observe_gui
+    kind: observation
+    description: Observe accessibility and GUI state.
+    modalities: [gui]
+  - id: capability.observe_image
+    kind: observation
+    description: Capture browser screenshots.
+    modalities: [image]
+  - id: capability.interactive
+    kind: observation
+    description: Expose interactive browser controls and accessibility targets.
+    modalities: [interactive]
+
+implementations:
+  - id: implementation.tandem.browser-http
+    implementation_ref: tandem-browser.http@1.0.0
+    provides:
+      - capability.fetch_url
+      - capability.navigate
+      - capability.observe_text
+      - capability.observe_structured
+      - capability.observe_gui
+      - capability.observe_image
+      - capability.interactive
+    requires: []
+    integration_mechanism: http
+    access:
+      access_id: access.tandem.browser
+      surface_ref: surface.tandem.http.browser
+      kind: browser
+      capabilities:
+        - capability.fetch_url
+        - capability.navigate
+        - capability.observe_text
+        - capability.observe_structured
+        - capability.observe_gui
+        - capability.observe_image
+        - capability.interactive
+      supported_methods:
+        - method.fetch_document@1.0.0
+      adapter_ref: adapter.tandem.browser@0.1.0
+      modalities: [text, structured, gui, image, interactive]
+      authority_profile: authority.human-browser-session
