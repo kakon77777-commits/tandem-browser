@@ -122,6 +122,26 @@ export function registerAgentRoutes(router: Router, ctx: RouteContext): void {
     }
   });
 
+  /** PMW SHARE operator — promote a PRIVATE task step to SHARED. */
+  router.post('/tasks/:id/steps/:stepIndex/promote', (req: Request, res: Response) => {
+    try {
+      const taskId = req.params.id as string;
+      const stepIndex = Number(req.params.stepIndex);
+      if (!Number.isInteger(stepIndex) || stepIndex < 0) {
+        res.status(400).json({ error: 'stepIndex must be a non-negative integer' });
+        return;
+      }
+      const task = ctx.taskManager.promoteStepScope(taskId, stepIndex);
+      res.json(task);
+    } catch (e) {
+      if (e instanceof Error && e.message.includes('not found')) {
+        res.status(404).json({ error: e.message });
+        return;
+      }
+      handleRouteError(res, e);
+    }
+  });
+
   router.post('/emergency-stop', (_req: Request, res: Response) => {
     try {
       const result = ctx.taskManager.emergencyStop();

@@ -12,20 +12,19 @@ vi.mock('electron', () => ({
   },
 }));
 
-import { McpHttpTransportManager } from '../http-transport';
+import { handleMcpRequest } from '../http-transport';
 
 /**
- * Spin up a tiny HTTP server that wires each request through the manager,
+ * Spin up a tiny HTTP server that wires each request through handleMcpRequest,
  * so the SDK's StreamableHTTPServerTransport gets real Node.js req/res objects.
  */
-function createTestServer(manager: McpHttpTransportManager) {
+function createTestServer() {
   const server = http.createServer(async (req, res) => {
-    // Collect body
     const chunks: Buffer[] = [];
     for await (const chunk of req) chunks.push(chunk as Buffer);
     const rawBody = Buffer.concat(chunks).toString('utf-8');
     const body = rawBody ? JSON.parse(rawBody) : undefined;
-    await manager.handleRequest(req, res, body);
+    await handleMcpRequest(req, res, body);
   });
   return server;
 }
@@ -39,15 +38,12 @@ async function startServer(server: http.Server): Promise<number> {
 
 async function mcpFetch(port: number, opts: {
   method?: string;
-  sessionId?: string;
   body?: unknown;
-  token?: string;
 }): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: unknown; raw: string }> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'Accept': 'application/json, text/event-stream',
   };
-  if (opts.sessionId) headers['mcp-session-id'] = opts.sessionId;
 
   const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
     method: opts.method ?? 'POST',
@@ -69,127 +65,80 @@ async function mcpFetch(port: number, opts: {
   };
 }
 
-function initializeBody(id = 1) {
-  return {
-    jsonrpc: '2.0',
-    id,
-    method: 'initialize',
-    params: {
-      protocolVersion: '2025-03-26',
-      capabilities: {},
-      clientInfo: { name: 'test-client', version: '1.0.0' },
-    },
-  };
+function toolsListBody(id = 1) {
+  return { jsonrpc: '2.0', id, method: 'tools/list', params: {} };
 }
 
-describe('McpHttpTransportManager', () => {
-  let manager: McpHttpTransportManager;
+describe('handleMcpRequest (stateless, 2026-07-28 spec)', () => {
   let server: http.Server;
   let port: number;
 
   beforeEach(async () => {
-    manager = new McpHttpTransportManager();
-    server = createTestServer(manager);
+    server = createTestServer();
     port = await startServer(server);
   });
 
   afterEach(async () => {
-    await manager.stop();
     server.close();
   });
 
-  it('starts with zero sessions', () => {
-    expect(manager.sessionCount).toBe(0);
-  });
-
-  it('rejects GET without session ID', async () => {
+  it('rejects GET with 405', async () => {
     const res = await mcpFetch(port, { method: 'GET' });
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(405);
   });
 
-  it('creates a session on initialize and returns session ID', async () => {
-    const res = await mcpFetch(port, { body: initializeBody() });
+  it('rejects DELETE with 405', async () => {
+    const res = await mcpFetch(port, { method: 'DELETE' });
+    expect(res.status).toBe(405);
+  });
+
+  it('serves tools/list directly, with no prior initialize handshake', async () => {
+    const res = await mcpFetch(port, { body: toolsListBody() });
     expect(res.status).toBe(200);
-    expect(res.headers['mcp-session-id']).toBeDefined();
-    expect(manager.sessionCount).toBe(1);
+    const data = res.body as any;
+    expect(data.result?.tools?.length).toBeGreaterThan(200);
   });
 
-  it('handles subsequent requests on existing session', async () => {
-    // Initialize
-    const initRes = await mcpFetch(port, { body: initializeBody() });
-    const sessionId = initRes.headers['mcp-session-id'] as string;
-    expect(sessionId).toBeDefined();
+  it('never sets Mcp-Session-Id — stateless has no session', async () => {
+    const res = await mcpFetch(port, { body: toolsListBody() });
+    expect(res.headers['mcp-session-id']).toBeUndefined();
+  });
 
-    // Send initialized notification (required by protocol before tool calls)
+  it('a legacy client that still sends initialize + notifications/initialized keeps working', async () => {
+    const initRes = await mcpFetch(port, {
+      body: {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2025-03-26',
+          capabilities: {},
+          clientInfo: { name: 'legacy-test-client', version: '1.0.0' },
+        },
+      },
+    });
+    expect(initRes.status).toBe(200);
+
+    // Stateless server has no session to attach this to — a fresh request,
+    // same as any other. The legacy client's notification is harmless noise.
     await mcpFetch(port, {
-      sessionId,
       body: { jsonrpc: '2.0', method: 'notifications/initialized' },
     });
 
-    // List tools
-    const toolsRes = await mcpFetch(port, {
-      sessionId,
-      body: { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} },
-    });
+    const toolsRes = await mcpFetch(port, { body: toolsListBody(2) });
     expect(toolsRes.status).toBe(200);
-    // Should contain tandem tools
     const data = toolsRes.body as any;
     expect(data.result?.tools?.length).toBeGreaterThan(200);
-    expect(manager.sessionCount).toBe(1);
   });
 
-  it('returns 404 for unknown session ID', async () => {
-    const res = await mcpFetch(port, {
-      sessionId: 'non-existent',
-      body: { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} },
-    });
-    expect(res.status).toBe(404);
-  });
-
-  it('DELETE closes a session', async () => {
-    const initRes = await mcpFetch(port, { body: initializeBody() });
-    const sessionId = initRes.headers['mcp-session-id'] as string;
-    expect(manager.sessionCount).toBe(1);
-
-    const delRes = await mcpFetch(port, { method: 'DELETE', sessionId });
-    expect(delRes.status).toBe(200);
-    expect(manager.sessionCount).toBe(0);
-  });
-
-  it('start() and stop() manage cleanup timer', async () => {
-    manager.start();
-    manager.start(); // idempotent
-
-    const initRes = await mcpFetch(port, { body: initializeBody() });
-    expect(initRes.headers['mcp-session-id']).toBeDefined();
-    expect(manager.sessionCount).toBe(1);
-
-    await manager.stop();
-    expect(manager.sessionCount).toBe(0);
-
-    // safe to call again
-    await manager.stop();
-  });
-
-  it('closeAllSessions removes all sessions', async () => {
-    await mcpFetch(port, { body: initializeBody(1) });
-    await mcpFetch(port, { body: initializeBody(2) });
-    expect(manager.sessionCount).toBe(2);
-
-    await manager.closeAllSessions();
-    expect(manager.sessionCount).toBe(0);
-  });
-
-  it('returns 503 when max sessions (20) reached', async () => {
-    // Create 20 sessions
-    for (let i = 0; i < 20; i++) {
-      const res = await mcpFetch(port, { body: initializeBody(i + 1) });
-      expect(res.status).toBe(200);
-    }
-    expect(manager.sessionCount).toBe(20);
-
-    // 21st should fail
-    const res = await mcpFetch(port, { body: initializeBody(100) });
-    expect(res.status).toBe(503);
+  it('handles two concurrent requests independently with no shared state leaking between them', async () => {
+    const [a, b] = await Promise.all([
+      mcpFetch(port, { body: toolsListBody(1) }),
+      mcpFetch(port, { body: toolsListBody(2) }),
+    ]);
+    expect(a.status).toBe(200);
+    expect(b.status).toBe(200);
+    expect((a.body as any).result?.tools?.length).toBeGreaterThan(200);
+    expect((b.body as any).result?.tools?.length).toBeGreaterThan(200);
   });
 });

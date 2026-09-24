@@ -119,7 +119,17 @@ describe('MCP handoff tools', () => {
     const result = await handler({ id: 'handoff-1' });
 
     expectTextContent(result, 'Handoff ready: handoff-1');
-    expect(mockApiCall).toHaveBeenCalledWith('POST', '/handoffs/handoff-1/ready');
+    expect(mockApiCall).toHaveBeenCalledWith('POST', '/handoffs/handoff-1/ready', { actorId: undefined });
+  });
+
+  it('marks a handoff ready with an actorId for the I4 authority check', async () => {
+    const handler = getHandler(tools, 'tandem_handoff_ready');
+    mockApiCall.mockResolvedValueOnce({ id: 'handoff-1', status: 'ready_to_resume' });
+    mockLogActivity.mockResolvedValueOnce(undefined);
+
+    await handler({ id: 'handoff-1', actorId: 'gpt-agent' });
+
+    expect(mockApiCall).toHaveBeenCalledWith('POST', '/handoffs/handoff-1/ready', { actorId: 'gpt-agent' });
   });
 
   it('resumes a handoff-linked task', async () => {
@@ -141,7 +151,7 @@ describe('MCP handoff tools', () => {
     const result = await handler({ id: 'handoff-1' });
 
     expectTextContent(result, 'Handoff approved: handoff-1');
-    expect(mockApiCall).toHaveBeenCalledWith('POST', '/handoffs/handoff-1/approve');
+    expect(mockApiCall).toHaveBeenCalledWith('POST', '/handoffs/handoff-1/approve', { actorId: undefined });
   });
 
   it('rejects a waiting handoff', async () => {
@@ -152,7 +162,7 @@ describe('MCP handoff tools', () => {
     const result = await handler({ id: 'handoff-1' });
 
     expectTextContent(result, 'Handoff rejected: handoff-1');
-    expect(mockApiCall).toHaveBeenCalledWith('POST', '/handoffs/handoff-1/reject');
+    expect(mockApiCall).toHaveBeenCalledWith('POST', '/handoffs/handoff-1/reject', { actorId: undefined });
   });
 
   it('passes notify and action hints through on create', async () => {

@@ -100,6 +100,24 @@ describe('TaskManager', () => {
         expect.any(String)
       );
     });
+
+    it('starts at version 1', () => {
+      const task = tm.createTask('Task', 'user', 'claude', []);
+      expect(task.version).toBe(1);
+    });
+  });
+
+  describe('version (CAS)', () => {
+    it('getTask() defaults a legacy on-disk task with no version field to version 1', () => {
+      vi.mocked(fs.existsSync).mockReturnValue(true);
+      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({
+        id: 'legacy-1', description: 'Old task', createdBy: 'user', assignedTo: 'claude',
+        status: 'pending', steps: [], currentStep: 0, results: [], createdAt: 1, updatedAt: 1,
+      }));
+
+      const task = tm.getTask('legacy-1');
+      expect(task?.version).toBe(1);
+    });
   });
 
   describe('needsApproval()', () => {
@@ -314,6 +332,53 @@ describe('TaskManager', () => {
       const result = tm.updateStepStatus(task.id, '__proto__' as any, 'done');
       expect(result).toBeNull();
       expect(vi.mocked(fs.writeFileSync).mock.calls.length).toBe(writesBefore);
+    });
+
+    it('updateStepStatus with a matching expectedVersion succeeds', () => {
+      expect(task.version).toBe(1);
+      const result = tm.updateStepStatus(task.id, 0, 'done', undefined, task.version);
+      expect(result?.steps[0].status).toBe('done');
+    });
+
+    it('updateStepStatus with a stale expectedVersion throws VersionConflictError and does not write', () => {
+      const writesBefore = vi.mocked(fs.writeFileSync).mock.calls.length;
+      expect(() => tm.updateStepStatus(task.id, 0, 'done', undefined, 999)).toThrow('Version conflict');
+      expect(vi.mocked(fs.writeFileSync).mock.calls.length).toBe(writesBefore);
+    });
+
+    it('updateStepStatus without expectedVersion keeps last-write-wins behavior', () => {
+      const result = tm.updateStepStatus(task.id, 0, 'done');
+      expect(result?.steps[0].status).toBe('done');
+    });
+
+    describe('promoteStepScope() — PMW SHARE operator', () => {
+      it('promotes a step with no scope set (implicitly SHARED) — throws, nothing to promote', () => {
+        expect(() => tm.promoteStepScope(task.id, 0)).toThrow('Cannot promote task step');
+      });
+
+      it('promotes a PRIVATE step to SHARED', () => {
+        task.steps[0].scope = 'PRIVATE';
+        vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(task));
+
+        const result = tm.promoteStepScope(task.id, 0);
+        expect(result.steps[0].scope).toBe('SHARED');
+      });
+
+      it('throws for an invalid step index', () => {
+        expect(() => tm.promoteStepScope(task.id, 99)).toThrow('not found');
+      });
+
+      it('throws for an unknown task id', () => {
+        vi.mocked(fs.existsSync).mockReturnValue(false);
+        expect(() => tm.promoteStepScope('missing-task', 0)).toThrow('not found');
+      });
+
+      it('honors expectedVersion (CAS)', () => {
+        task.steps[0].scope = 'PRIVATE';
+        vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(task));
+
+        expect(() => tm.promoteStepScope(task.id, 0, 999)).toThrow('Version conflict');
+      });
     });
 
     it('markTaskFailed changes status and adds error', () => {

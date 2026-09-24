@@ -123,12 +123,15 @@ export function registerHandoffTools(server: McpServer): void {
 
   server.tool(
     'tandem_handoff_ready',
-    'Mark a human-blocked handoff as ready to resume so the linked task moves into a resumable state.',
-    {
+    'Mark a human-blocked handoff as ready to resume so the linked task moves into a resumable state. ' +
+    'Pass actorId to identify yourself — an AI agent marking its own medium/high-risk step ready is ' +
+    'rejected (403, PMW invariant I4); omit it to keep the unauthenticated prior behavior.',
+    coerceShape({
       id: z.string().describe('The handoff ID'),
-    },
-    async ({ id }) => {
-      const handoff = await apiCall('POST', `/handoffs/${encodeURIComponent(id)}/ready`);
+      actorId: z.string().optional().describe('Agent ID marking this ready, checked against its registered kind'),
+    }),
+    async ({ id, actorId }) => {
+      const handoff = await apiCall('POST', `/handoffs/${encodeURIComponent(id)}/ready`, { actorId });
       await logActivity('handoff_ready', id);
       return {
         content: [{
@@ -160,11 +163,12 @@ export function registerHandoffTools(server: McpServer): void {
   server.tool(
     'tandem_handoff_approve',
     'Approve a waiting-approval handoff and let the linked task step continue.',
-    {
+    coerceShape({
       id: z.string().describe('The handoff ID'),
-    },
-    async ({ id }) => {
-      const handoff = await apiCall('POST', `/handoffs/${encodeURIComponent(id)}/approve`);
+      actorId: z.string().optional().describe('Agent ID approving, recorded on the decision receipt'),
+    }),
+    async ({ id, actorId }) => {
+      const handoff = await apiCall('POST', `/handoffs/${encodeURIComponent(id)}/approve`, { actorId });
       await logActivity('handoff_approve', id);
       return {
         content: [{
@@ -178,11 +182,12 @@ export function registerHandoffTools(server: McpServer): void {
   server.tool(
     'tandem_handoff_reject',
     'Reject a waiting-approval handoff and keep the linked task paused.',
-    {
+    coerceShape({
       id: z.string().describe('The handoff ID'),
-    },
-    async ({ id }) => {
-      const handoff = await apiCall('POST', `/handoffs/${encodeURIComponent(id)}/reject`);
+      actorId: z.string().optional().describe('Agent ID rejecting, recorded on the decision receipt'),
+    }),
+    async ({ id, actorId }) => {
+      const handoff = await apiCall('POST', `/handoffs/${encodeURIComponent(id)}/reject`, { actorId });
       await logActivity('handoff_reject', id);
       return {
         content: [{

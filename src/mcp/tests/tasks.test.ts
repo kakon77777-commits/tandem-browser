@@ -34,6 +34,32 @@ describe('MCP task tools', () => {
       expectTextContent(result, 'Task created: task-1');
       expectTextContent(result, 'Steps: 1');
     });
+
+    it('classifies each step\'s riskLevel from its actionType instead of hardcoding low', async () => {
+      mockApiCall.mockResolvedValueOnce({ id: 'task-1', status: 'pending' });
+      mockLogActivity.mockResolvedValueOnce(undefined);
+
+      await handler({
+        description: 'Mixed-risk task',
+        steps: [
+          { description: 'Read the page', actionType: 'read_page' },
+          { description: 'Go to page', actionType: 'navigate' },
+          { description: 'Click a button', actionType: 'click' },
+          { description: 'Type into a field', actionType: 'type' },
+          { description: 'Unknown action', actionType: 'something_unrecognized' },
+        ],
+      });
+
+      expect(mockApiCall).toHaveBeenCalledWith('POST', '/tasks', expect.objectContaining({
+        steps: [
+          expect.objectContaining({ action: { type: 'read_page', params: {} }, riskLevel: 'none' }),
+          expect.objectContaining({ action: { type: 'navigate', params: {} }, riskLevel: 'low' }),
+          expect.objectContaining({ action: { type: 'click', params: {} }, riskLevel: 'medium' }),
+          expect.objectContaining({ action: { type: 'type', params: {} }, riskLevel: 'high' }),
+          expect.objectContaining({ action: { type: 'something_unrecognized', params: {} }, riskLevel: 'medium' }),
+        ],
+      }));
+    });
   });
 
   describe('tandem_emergency_stop', () => {
@@ -91,6 +117,21 @@ describe('MCP task tools', () => {
     });
   });
 
+  describe('tandem_task_step_promote', () => {
+    const handler = getHandler(tools, 'tandem_task_step_promote');
+
+    it('promotes a task step to SHARED', async () => {
+      mockApiCall.mockResolvedValueOnce({ id: 't1', steps: [{ scope: 'SHARED' }] });
+      mockLogActivity.mockResolvedValueOnce(undefined);
+
+      const result = await handler({ id: 't1', stepIndex: 0 });
+
+      expectTextContent(result, 'SHARED');
+      expect(mockApiCall).toHaveBeenCalledWith('POST', '/tasks/t1/steps/0/promote');
+      expect(mockLogActivity).toHaveBeenCalledWith('task_step_promote', 'task t1, step 0');
+    });
+  });
+
   describe('tandem_tab_lock', () => {
     const handler = getHandler(tools, 'tandem_tab_lock');
 
@@ -98,14 +139,30 @@ describe('MCP task tools', () => {
       mockApiCall.mockResolvedValueOnce({ locked: true });
       mockLogActivity.mockResolvedValueOnce(undefined);
       await handler({ tabId: 't1', agent: 'claude' });
-      expect(mockApiCall).toHaveBeenCalledWith('POST', '/tab-locks/acquire', { tabId: 't1', agent: 'claude' });
+      // Route reads req.body.agentId, not `agent` — this used to leak
+      // `agent` verbatim and every real call 400'd server-side.
+      expect(mockApiCall).toHaveBeenCalledWith('POST', '/tab-locks/acquire', { tabId: 't1', agentId: 'claude' });
+    });
+
+    it('omits agentId when no agent is given, matching the route requiring it explicitly', async () => {
+      mockApiCall.mockResolvedValueOnce({ locked: true });
+      mockLogActivity.mockResolvedValueOnce(undefined);
+      await handler({ tabId: 't1' });
+      expect(mockApiCall).toHaveBeenCalledWith('POST', '/tab-locks/acquire', { tabId: 't1' });
     });
   });
 
   describe('tandem_tab_unlock', () => {
     const handler = getHandler(tools, 'tandem_tab_unlock');
 
-    it('releases a tab lock', async () => {
+    it('releases a tab lock, passing the owning agentId the route requires', async () => {
+      mockApiCall.mockResolvedValueOnce({ released: true });
+      mockLogActivity.mockResolvedValueOnce(undefined);
+      await handler({ tabId: 't1', agent: 'claude' });
+      expect(mockApiCall).toHaveBeenCalledWith('POST', '/tab-locks/release', { tabId: 't1', agentId: 'claude' });
+    });
+
+    it('omits agentId when no agent is given', async () => {
       mockApiCall.mockResolvedValueOnce({ released: true });
       mockLogActivity.mockResolvedValueOnce(undefined);
       await handler({ tabId: 't1' });

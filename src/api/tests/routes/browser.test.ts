@@ -155,13 +155,34 @@ describe('Browser Routes', () => {
       });
     });
 
-    it('focuses tabId before navigating when provided', async () => {
+    it('focuses a background tab via the X-Tab-Id header before navigating, matching what tandem_navigate actually sends', async () => {
       const res = await request(app)
         .post('/navigate')
-        .send({ url: 'https://example.com', tabId: 'tab-5' });
+        .set('X-Tab-Id', 'tab-1')
+        .send({ url: 'https://example.com' });
 
       expect(res.status).toBe(200);
-      expect(ctx.tabManager.focusTab).toHaveBeenCalledWith('tab-5');
+      expect(ctx.tabManager.focusTab).toHaveBeenCalledWith('tab-1');
+    });
+
+    it('falls back to body.tabId when no X-Tab-Id header is present', async () => {
+      const res = await request(app)
+        .post('/navigate')
+        .send({ url: 'https://example.com', tabId: 'tab-1' });
+
+      expect(res.status).toBe(200);
+      expect(ctx.tabManager.focusTab).toHaveBeenCalledWith('tab-1');
+    });
+
+    it('returns 404 without navigating when the requested tab does not exist', async () => {
+      const res = await request(app)
+        .post('/navigate')
+        .set('X-Tab-Id', 'tab-missing')
+        .send({ url: 'https://example.com' });
+
+      expect(res.status).toBe(404);
+      expect(res.body.error).toBe('Tab tab-missing not found');
+      expect(ctx.tabManager.focusTab).not.toHaveBeenCalled();
     });
 
     it('creates a new tab for non-default session with no existing tabs', async () => {

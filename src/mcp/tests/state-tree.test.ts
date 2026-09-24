@@ -62,6 +62,27 @@ describe('MCP state-tree tools', () => {
     expect(mockLogActivity).toHaveBeenCalledWith('state_fork', 'state-1 -> state-2');
   });
 
+  it('joins a branch back into another', async () => {
+    const handler = getHandler(tools, 'tandem_state_join');
+    mockApiCall.mockResolvedValueOnce({ id: 'state-3', parentId: 'state-1', joinedFromId: 'state-2' });
+    mockLogActivity.mockResolvedValueOnce(undefined);
+
+    const result = await handler({ id: 'state-1', joinedFromId: 'state-2', label: 'reconciled' });
+
+    expectTextContent(result, 'state-3');
+    expect(mockApiCall).toHaveBeenCalledWith('POST', '/state-tree/state-1/join', { joinedFromId: 'state-2', label: 'reconciled' }, undefined);
+    expect(mockLogActivity).toHaveBeenCalledWith('state_join', 'state-1 + state-2 -> state-3');
+  });
+
+  it('joins with a tabId, passing X-Tab-Id headers', async () => {
+    const handler = getHandler(tools, 'tandem_state_join');
+    mockApiCall.mockResolvedValueOnce({ id: 'state-3' });
+
+    await handler({ id: 'state-1', joinedFromId: 'state-2', tabId: 'tab-9' });
+
+    expect(mockApiCall).toHaveBeenCalledWith('POST', '/state-tree/state-1/join', expect.anything(), { 'X-Tab-Id': 'tab-9' });
+  });
+
   it('lists nodes with filters as query params', async () => {
     const handler = getHandler(tools, 'tandem_state_list');
     mockApiCall.mockResolvedValueOnce([{ id: 'state-1' }]);

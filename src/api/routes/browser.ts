@@ -14,6 +14,7 @@ import { DEFAULT_TIMEOUT_MS } from '../../utils/constants';
 import { isSafeNavigationUrl, resolvePathInAllowedRoots } from '../../utils/security';
 import { createRateLimitMiddleware } from '../rate-limit';
 import { injectionScannerMiddleware } from '../middleware/injection-scanner';
+import { capturePagePng } from '../../utils/screenshot';
 
 /** Maximum allowed code length for JS execution endpoints (1 MB) */
 const MAX_CODE_LENGTH = 1_048_576;
@@ -88,7 +89,7 @@ export function registerBrowserRoutes(router: Router, ctx: RouteContext): void {
   // ═══════════════════════════════════════════════
 
   router.post('/navigate', async (req: Request, res: Response) => {
-    const { url, tabId } = req.body;
+    const { url } = req.body;
     if (!url) { res.status(400).json({ error: 'url required' }); return; }
     if (!isSafeNavigationUrl(url)) {
       res.status(400).json({ error: 'Unsafe URL scheme or private/loopback host', url });
@@ -109,9 +110,21 @@ export function registerBrowserRoutes(router: Router, ctx: RouteContext): void {
         }
         // Focus existing session tab
         await ctx.tabManager.focusTab(sessionTabs[0].id);
-      } else if (tabId) {
-        // If tabId specified, focus that tab first
-        await ctx.tabManager.focusTab(tabId);
+      } else {
+        // Honors X-Tab-Id (matching every other route in this file, and
+        // what tandem_navigate actually sends) with body.tabId as a
+        // fallback. Previously read only req.body.tabId directly, which
+        // the MCP tool never populates — it sends the header — so a
+        // background-tab target was silently ignored and this always
+        // acted on the active tab instead.
+        const requestedTab = resolveRequestedTab(ctx, req, { allowBody: true });
+        if (requestedTab.requestedTabId) {
+          if (!requestedTab.tab) {
+            sendRequestedTabNotFound(res, requestedTab.requestedTabId);
+            return;
+          }
+          await ctx.tabManager.focusTab(requestedTab.requestedTabId);
+        }
       }
       const wc = await getActiveWC(ctx);
       if (!wc) { res.status(500).json({ error: 'No active tab' }); return; }
@@ -347,8 +360,7 @@ export function registerBrowserRoutes(router: Router, ctx: RouteContext): void {
     try {
       const wc = await getSessionWC(ctx, req);
       if (!wc) { res.status(500).json({ error: 'No active tab' }); return; }
-      const image = await wc.capturePage();
-      const png = image.toPNG();
+      const png = await capturePagePng(wc);
 
       if (req.query.save) {
         const allowedDirs = [

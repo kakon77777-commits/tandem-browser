@@ -29,6 +29,10 @@ export function createMockWebContents(id = 1) {
     capturePage: vi.fn().mockResolvedValue({
       toPNG: () => Buffer.from('fake-png'),
     }),
+    debugger: {
+      isAttached: vi.fn().mockReturnValue(false),
+      sendCommand: vi.fn().mockResolvedValue({}),
+    },
     sendInputEvent: vi.fn(),
     isDestroyed: vi.fn().mockReturnValue(false),
     insertCSS: vi.fn().mockResolvedValue(''),
@@ -430,8 +434,12 @@ export function createMockContext(): RouteContext {
         message: '',
         createdAt: Date.now(),
         resolvedAt: null,
+        version: 1,
+        scope: 'SHARED',
+        ownerAgent: null,
       }),
       resolve: vi.fn().mockReturnValue(null),
+      promote: vi.fn().mockImplementation(() => { throw new Error('Annotation missing not found'); }),
       remove: vi.fn().mockReturnValue(false),
       on: vi.fn(),
     } as any,
@@ -465,8 +473,50 @@ export function createMockContext(): RouteContext {
         screenshotPath: null,
         createdAt: Date.now(),
       }),
+      join: vi.fn().mockReturnValue({
+        id: 'state-3',
+        parentId: 'state-1',
+        joinedFromId: 'state-2',
+        taskId: null,
+        tabId: null,
+        webContentsId: null,
+        label: 'snapshot',
+        url: null,
+        domSummary: null,
+        screenshotPath: null,
+        createdAt: Date.now(),
+      }),
       compare: vi.fn().mockReturnValue(null),
       remove: vi.fn().mockReturnValue(false),
+      on: vi.fn(),
+    } as any,
+
+    // ── decisionReceiptManager ────────────────────
+    decisionReceiptManager: {
+      list: vi.fn().mockReturnValue([]),
+      get: vi.fn().mockReturnValue(null),
+      record: vi.fn().mockReturnValue({
+        id: 'receipt-1',
+        taskId: null,
+        stepId: null,
+        handoffId: null,
+        actor: 'user',
+        decision: 'ACTION',
+        riskLevel: null,
+        evidenceRefs: [],
+        note: '',
+        createdAt: Date.now(),
+      }),
+      on: vi.fn(),
+    } as any,
+
+    // ── agentRegistry ────────────────────────────
+    agentRegistry: {
+      list: vi.fn().mockReturnValue([]),
+      get: vi.fn().mockReturnValue(null),
+      touch: vi.fn().mockImplementation((id: string, kind?: string) => ({
+        id, kind: kind ?? (id === 'user' ? 'human' : 'ai'), firstSeenAt: 1, lastSeenAt: 1,
+      })),
       on: vi.fn(),
     } as any,
 
@@ -486,6 +536,7 @@ export function createMockContext(): RouteContext {
       resumeTask: vi.fn().mockReturnValue(null),
       clearStepHandoff: vi.fn().mockReturnValue(null),
       updateStepStatus: vi.fn(),
+      promoteStepScope: vi.fn().mockImplementation(() => { throw new Error('not found'); }),
       emergencyStop: vi.fn().mockReturnValue({ stopped: 0 }),
       requestApproval: vi.fn().mockResolvedValue(true),
       needsApproval: vi.fn().mockReturnValue(false),

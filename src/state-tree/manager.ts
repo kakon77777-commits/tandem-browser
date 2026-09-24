@@ -20,6 +20,8 @@ import { ensureDir, tandemDir } from '../utils/paths';
 export interface StateNode {
   id: string;
   parentId: string | null;
+  /** PMW's JOIN operator: a second parent this node also absorbs, alongside `parentId`. See join(). */
+  joinedFromId: string | null;
   taskId: string | null;
   tabId: string | null;
   webContentsId: number | null;
@@ -32,6 +34,7 @@ export interface StateNode {
 
 export interface CaptureStateNodeInput {
   parentId?: string | null;
+  joinedFromId?: string | null;
   taskId?: string | null;
   tabId?: string | null;
   webContentsId?: number | null;
@@ -59,6 +62,7 @@ function sanitizeStateNode(raw: unknown): StateNode | null {
   return {
     id: n.id,
     parentId: typeof n.parentId === 'string' ? n.parentId : null,
+    joinedFromId: typeof n.joinedFromId === 'string' ? n.joinedFromId : null,
     taskId: typeof n.taskId === 'string' ? n.taskId : null,
     tabId: typeof n.tabId === 'string' ? n.tabId : null,
     webContentsId: isFiniteNumber(n.webContentsId) ? n.webContentsId : null,
@@ -72,6 +76,24 @@ function sanitizeStateNode(raw: unknown): StateNode | null {
 
 function cloneStateNode(node: StateNode): StateNode {
   return { ...node };
+}
+
+/**
+ * PMW's JOIN operator on the State Tree: absorbing one branch into another.
+ * `'self'` — joinedFromId === parentId, meaningless. `'different-roots'` —
+ * the two branches don't share a root capture; State Tree nodes are scoped
+ * to a single lineage (see join()'s own doc comment), so joining across
+ * unrelated captures would fabricate a relationship with no real use case.
+ */
+export class InvalidJoinError extends Error {
+  constructor(
+    public readonly parentId: string,
+    public readonly joinedFromId: string,
+    public readonly reason: 'self' | 'different-roots',
+  ) {
+    super(`Cannot join ${joinedFromId} into ${parentId}: ${reason}`);
+    this.name = 'InvalidJoinError';
+  }
 }
 
 // ─── Manager ─────────────────────────────────────────────────────────────────
@@ -125,7 +147,7 @@ export class StateTreeManager extends EventEmitter {
 
   children(id: string): StateNode[] {
     return Array.from(this.nodes.values())
-      .filter((n) => n.parentId === id)
+      .filter((n) => n.parentId === id || n.joinedFromId === id)
       .sort((a, b) => a.createdAt - b.createdAt)
       .map(cloneStateNode);
   }
@@ -139,6 +161,7 @@ export class StateTreeManager extends EventEmitter {
     const node: StateNode = {
       id: `state-${now}-${Math.random().toString(36).slice(2, 8)}`,
       parentId: input.parentId ?? null,
+      joinedFromId: input.joinedFromId ?? null,
       taskId: input.taskId ?? null,
       tabId: input.tabId ?? null,
       webContentsId: input.webContentsId ?? null,
@@ -168,6 +191,34 @@ export class StateTreeManager extends EventEmitter {
     return this.capture({ ...input, parentId });
   }
 
+  /**
+   * PMW's JOIN operator: absorb `joinedFromId`'s branch into `parentId`'s.
+   * Like fork(), this re-observes the live browser right now (after a
+   * human or agent has manually reconciled the two branches on the actual
+   * page) and records that as a new node — it does NOT algorithmically
+   * merge the two branches' stored domSummary/screenshotPath content, the
+   * same way fork() does not restore history. The new node carries both
+   * parent pointers, so children() surfaces it from either source branch.
+   * Because both ids must already exist and a fresh id is always minted,
+   * the resulting graph's edges only ever point from newer to older nodes
+   * - cycles are structurally impossible without an explicit check.
+   */
+  join(parentId: string, joinedFromId: string, input: Omit<CaptureStateNodeInput, 'parentId' | 'joinedFromId'>): StateNode {
+    if (!this.nodes.has(parentId)) {
+      throw new Error(`State node ${parentId} not found`);
+    }
+    if (!this.nodes.has(joinedFromId)) {
+      throw new Error(`State node ${joinedFromId} not found`);
+    }
+    if (joinedFromId === parentId) {
+      throw new InvalidJoinError(parentId, joinedFromId, 'self');
+    }
+    if (this.rootOf(parentId) !== this.rootOf(joinedFromId)) {
+      throw new InvalidJoinError(parentId, joinedFromId, 'different-roots');
+    }
+    return this.capture({ ...input, parentId, joinedFromId });
+  }
+
   /** Side-by-side lookup of two nodes for the caller to diff (screenshots, DOM summaries, URLs). */
   compare(idA: string, idB: string): { a: StateNode; b: StateNode } | null {
     const a = this.nodes.get(idA);
@@ -188,7 +239,20 @@ export class StateTreeManager extends EventEmitter {
     this.removeAllListeners();
   }
 
-  // === 7. Private I/O ===
+  // === 7. Private helpers ===
+
+  /** Walk parentId only (never joinedFromId) up to the root capture. */
+  private rootOf(id: string): string {
+    let current = this.nodes.get(id);
+    let currentId = id;
+    while (current?.parentId) {
+      currentId = current.parentId;
+      current = this.nodes.get(currentId);
+    }
+    return currentId;
+  }
+
+  // === 8. Private I/O ===
 
   private loadFromDisk(): void {
     try {

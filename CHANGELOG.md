@@ -4,6 +4,115 @@ All notable changes to Tandem Browser will be documented in this file.
 
 ## Unreleased
 
+### Fixed
+
+- **`POST /navigate` silently ignored background-tab targeting** (`src/api/routes/browser.ts`) —
+  read `tabId` from `req.body` while `tandem_navigate` sends it via the `X-Tab-Id`
+  header (every other route in the file already used the shared
+  `resolveRequestedTab()` helper for this; `/navigate` was the sole outlier).
+  A caller targeting a specific background tab had it silently ignored and
+  the currently-active tab was navigated instead - found while setting up a
+  live Claude↔Codex collaboration test through Tandem, where the wrong tab
+  visibly changed instead of the one explicitly targeted. Also now returns
+  404 instead of proceeding when the requested tab id doesn't exist (the
+  old code called `focusTab()` unconditionally with no existence check).
+  Audited all 44 other MCP call sites that send `tabId` via this header
+  across `content.ts`/`devtools.ts`/`forms.ts`/`navigation.ts`/`network.ts`/
+  `snapshots.ts`/`state-tree.ts` - every other route already resolves it
+  correctly; this was the only broken one. Verified live: navigating a
+  specific background tab (`tab-2`) while a different tab was active now
+  updates the requested tab, not the active one.
+- **`tandem_create_task` hardcoded every step's `riskLevel` to `'low'`**
+  (`src/mcp/tools/tasks.ts`) - never consulted `getRiskLevel(actionType)`
+  (`src/agents/task-manager.ts`), the lookup table that already exists for
+  exactly this classification (`type`/`execute_js`/`fill_form`/`submit` ->
+  `high`, `click`/`select` -> `medium`, etc.). Every task created through
+  this MCP tool - the tool an AI agent actually uses to create its own
+  tasks - was silently marked low-risk even for genuinely high-risk
+  actions like typing into a form, which undermines the approval-gating
+  `needsApproval()` is meant to enforce. `TaskManager.createTask()` and the
+  `POST /tasks` route both take `riskLevel` as given from the caller and
+  don't re-derive it, so this MCP tool's own hardcoding was the actual
+  gap, not a lower layer. Fixed by calling `getRiskLevel()` per step
+  instead. Found while live-verifying the I4 authority work below (the
+  live-verification task there needed a real high-risk step and this tool
+  couldn't produce one), flagged separately, and fixed on request rather
+  than folded silently into that change. `requiresApproval` was
+  deliberately left as-is - it isn't consulted anywhere in the codebase
+  (only `needsApproval()` is, a separate dynamic check), and every other
+  call site that constructs a `TaskStep` hand-sets it too, so this wasn't
+  part of the actual bug. Verified live through a real MCP client:
+  `read_page`/`navigate`/`click`/`type` steps in the same task now come
+  back classified `none`/`low`/`medium`/`high` respectively instead of all
+  reading `low`.
+
+### Added (SRW fork — local experiment, not upstreamed)
+
+- **PMW JOIN operator on the Browser State Tree** (`src/state-tree/manager.ts`
+  `join()`, `POST /state-tree/:id/join`, MCP `tandem_state_join`) - absorbs
+  one branch back into another. Like `fork()`, this re-observes the live tab
+  right now rather than algorithmically merging the two branches' stored
+  screenshots/DOM summaries - reconciliation happens on the actual page
+  first, JOIN just records the result with both parent pointers
+  (`parentId` + new `joinedFromId` field) so `children()` surfaces the
+  joined node from either source branch. Rejects joining a node with
+  itself and joining across two unrelated root captures (`InvalidJoinError`,
+  409) - State Tree nodes are scoped to one lineage, and a cross-root join
+  would fabricate a relationship with no real use case. Designed via a
+  research Workflow that read the existing State Tree code and this
+  project's own PMW-primitives contract doc rather than inventing a general
+  merge framework; explicitly does not do content merging, N-way joins, or
+  add a `version`/CAS field StateNode never had. Verified live end to end
+  against a running instance and through a real MCP client: forked two
+  branches with genuinely different navigation (Alan Turing / Ada Lovelace
+  Wikipedia pages), reconciled on the live tab, joined them, confirmed both
+  branches list the join node as a child, and confirmed both the self-join
+  and cross-root-join rejections return a readable 409 through the real
+  route and MCP tool rather than a 500.
+- **PMW invariant I4 (Authority Separation) on Handoff resolution**
+  (`src/handoffs/manager.ts` `AuthorityContext`/`InsufficientAuthorityError`/
+  `assertAuthority()`, `TaskHandoffCoordinator.markReady(id, actorId?)`,
+  `POST /handoffs/:id/ready|approve|reject` `actorId`, MCP
+  `tandem_handoff_ready`/`_approve`/`_reject` `actorId`) - closes the exact
+  gap `HandoffManager.accept()`'s own doc comment named since Phase 2:
+  nothing stopped an AI agent (or anything holding the shared bearer token)
+  from calling the public API/MCP surface to self-clear a handoff linked to
+  its own `medium`/`high`-risk step, even though `needsApproval()` had
+  already decided a human must review it - that risk model was advisory UX
+  enforced only by the desktop UI's IPC path, not a real boundary. Now an
+  `'ai'`-kind actor (resolved against Phase 4's `AgentRegistry`) is denied
+  (403, `InsufficientAuthorityError`) resolving a `medium`/`high`-risk
+  handoff; `'none'`/`low`/unlinked steps are unaffected, and a `'human'`
+  actor is never blocked. `'user'` always resolves to `kind: 'human'` even
+  if `AgentRegistry` never saw it touch()'d (matching how `TabLockManager`
+  already hardcodes that sentinel), so a real human can't get locked out by
+  a registry that just hasn't observed them yet. Fully opt-in, same
+  CAS-style pattern as `expectedVersion` - omit `actorId` and nothing
+  changes. A denial itself is recorded as a `decision: 'ERROR'` receipt
+  (PMW I6 - a blocked decision is still a decision). Deliberately scoped to
+  `markReady()` -> `accept()` only; `approve()`/`reject()` gained the
+  `actorId` param for decision-receipt attribution/API symmetry but do NOT
+  enforce I4 yet - rewiring them through `accept()`/`reject()` would be a
+  larger behavioral change than this primitive, left as a follow-up
+  decision rather than built silently. Designed via the same research
+  Workflow as JOIN (a synthesis pass caught a real gap neither individual
+  design mentioned: `TaskHandoffCoordinator` needed `AgentRegistry` threaded
+  into its constructor for `markReady()` to resolve an actor's kind at all -
+  added along with the wiring in `src/bootstrap/runtime.ts`). Verified live
+  end to end: registered a real AI agent identity via a tab-lock touch,
+  created a task with a genuine `high`-risk `type` step and a linked
+  handoff, had that same agent try to mark its own handoff ready - denied
+  (403, handoff version unchanged, ERROR receipt recorded and confirmed via
+  `GET /decision-receipts`), then resolved correctly as `actorId: 'user'`
+  (200, version incremented), and confirmed a `low`-risk step with the same
+  AI actor succeeds (no over-blocking) - all through both the raw routes
+  and a real MCP client. **Found in passing, flagged separately, not
+  fixed here (out of scope for I4)**: `tandem_create_task` hardcodes every
+  step's `riskLevel` to `'low'` regardless of `actionType`, never
+  consulting the `ACTION_RISK` table `getRiskLevel()` already exists for;
+  and `tandem_handoff_create` doesn't expose `taskId`/`stepId` even though
+  the underlying route accepts them.
+
 ### Added (SRW fork — local experiment, not upstreamed)
 
 - **Task↔Workspace↔View mapping** (`src/agents/task-tree.ts`, `AITask.workspaceId`,
@@ -25,7 +134,275 @@ All notable changes to Tandem Browser will be documented in this file.
   alternative attempts can branch and be compared side by side. Forking re-observes
   the live tab and records it as a child; it does not restore full runtime state.
 
+### Added (Localization — fork-local, not upstreamed)
+
+- **zh-TW (Traditional Chinese) interface language, selectable in Settings**
+  (`src/locale/resolver.ts`, `src/preload/locale.ts`, `shell/js/i18n.js`,
+  `--tandem-locale=` startup argument, `general.language` config field,
+  Settings → General → Language) - built as a mirror of this repo's existing
+  theme (dark/light) mechanism end to end: config persists the choice,
+  `src/preload/locale.ts` stamps `<html lang>`/`data-tandem-initial-locale`
+  before paint on the main window (no flash of English), pages without
+  preload access (`<webview>`-hosted shell pages) pick it up from an async
+  `/config` fetch instead, and a `tandem-locale` `BroadcastChannel` applies
+  the change live in every open window the moment it's changed in Settings.
+- **`shell/js/i18n.js` translation engine** - rather than requiring a
+  `data-i18n="key"` attribute on every one of the ~700 hardcoded English UI
+  strings across the shell, this walks the DOM (mirroring
+  `shortcut-labels.js`'s existing TreeWalker technique for Cmd/Ctrl label
+  rewriting) and replaces exact-match English source strings with their
+  translation in text nodes and in `title`/`placeholder`/`aria-label`/`alt`/
+  `data-tip` attributes, backed by a `MutationObserver` so content injected
+  later by any shell script is translated automatically without that script
+  needing to call anything. `window.TandemI18n.t(key)` / `t(key, params)`
+  cover the remaining cases the DOM scan structurally can't reach: strings
+  fused with runtime data via template literals (`{count}`/`{name}`-style
+  placeholder substitution), `<input>`/`<textarea>` `.value`, attribute or
+  property writes on an element that already exists in the document (which
+  never produces a childList mutation for the observer to see), and native
+  `alert()`/`confirm()` dialogs. Untranslated strings are left as English,
+  so any surface can be localized incrementally without touching this file.
+  16 unit tests in `shell/tests/i18n.test.js`.
+- **zh-TW translation dictionary now totals 726 entries** across every shell
+  surface: the main window chrome (toolbar, sidebar, find bar, draw toolbar, onboarding,
+  password vault, Wingman panel, keyboard-shortcuts overlay), the full
+  Settings page (all 11 tabs, including the Connected Agents pairing flow's
+  copy-paste AI instruction block and every toast/confirm message), the
+  standalone Bookmarks-manager and New Tab pages, the Help page, the About
+  panel (both the standalone page and the extensions-sidebar variant), every
+  sidebar panel (bookmarks, history, pinboards, workspaces, tab context
+  menu), the Wingman chat and handoff/approval-card UI, and the extensions/
+  video-recorder/ClaroNote/window-chrome surfaces. Pre-existing non-English
+  source strings (a handful of leftover Dutch strings from before this fork)
+  were translated as found rather than "fixed" to English first. Verified
+  with real device/DOM-dump checks against the running app, not just unit
+  tests, for the surfaces translated in the prior session (main window,
+  Settings). `npx vitest run` (3132 tests) and `npx tsc --noEmit` are clean
+  repo-wide; `npx eslint` is clean for every file this pass touched (a
+  pre-existing `state-tree.js` lint error from the unrelated, still-uncommitted
+  Task/State Tree work is untouched, not introduced by this pass).
+- **Translation dictionary split one file per language** (`shell/js/i18n/zh-TW.js`,
+  new; `shell/js/i18n.js` now reads `window.__TANDEM_I18N_DICTS__` instead of
+  holding the dictionary inline) - decided after comparing this repo's needs
+  against two of the author's other multi-language properties (a 60-language
+  Astro/Workers site and a 40-language sibling): both key their dictionaries
+  on literal English source text too, same as Tandem's TreeWalker-matching
+  approach already did - the only structural gap was that Tandem nested every
+  locale in one shared object literal instead of one file per language. That
+  gap was concrete, not hypothetical: merging four parallel translation
+  passes into the old single-file dictionary earlier in this same pass
+  surfaced three real duplicate-key collisions that had to be found and fixed
+  by hand. Splitting by file removes that class of conflict entirely (each
+  language's file is independent) without touching the matching engine, the
+  key scheme, or any existing translation - `shell/js/i18n/zh-TW.js` is a
+  mechanical, verified-byte-identical extraction of the prior inline object.
+  Every shell HTML document now loads `js/i18n/zh-TW.js` before `js/i18n.js`.
+  Adding a second language going forward means one new file under
+  `shell/js/i18n/` plus one new `<script>` tag per HTML document - no changes
+  to `i18n.js` itself. **Semantic keys (e.g. `'action.cancel'` instead of the
+  English string) were considered and explicitly rejected**: neither
+  reference property uses them either, and Tandem's TreeWalker DOM-scan -
+  the mechanism that lets most strings need only a dictionary entry, no code
+  change - depends on the key being the literal on-screen English text: a
+  semantic-key dictionary can't drive it, and would mean reintroducing the
+  `data-i18n="key"` attribute-on-every-element approach this file's own
+  header comment already documents choosing not to do.
+
+### Fixed
+
+- **`webContents.capturePage()` hanging forever on tab screenshots**
+  (`src/utils/screenshot.ts`, used by `GET /screenshot`, `POST /state-tree/capture`,
+  and the draw overlay's webview captures) - two distinct causes, confirmed live
+  against a running instance:
+  1. When a CDP debugger is already attached to the target (the common case -
+     stealth injection attaches one to nearly every tab, and DevToolsManager
+     attaches a fuller session on first console/network/snapshot/evaluate use)
+     and the tab is visible, Electron's native capture and the CDP session race
+     for the same compositor frame sink; native capture silently loses that race
+     instead of erroring. Fixed by capturing through the CDP session itself
+     (`Page.captureScreenshot`) whenever one is already attached, the same
+     approach Puppeteer/Playwright use, falling back to native `capturePage()`
+     only when nothing is attached.
+  2. A tab that isn't currently active is hidden via `display: none`
+     (`shell/css/sidebar.css`), which makes Electron suspend that guest view's
+     compositor entirely - confirmed neither native capture nor raw CDP
+     `Page.captureScreenshot` can produce a frame in that state, so this one
+     isn't fixable without changing how tabs are hidden. `capturePagePng()` now
+     bounds every capture to 8s and fails with a clear error instead of hanging
+     the request forever.
+
+### Changed
+
+- **HTTP MCP transport (`GET/POST/DELETE /mcp`) migrated to the MCP 2026-07-28
+  stateless specification** (`src/mcp/http-transport.ts`, `src/api/server.ts`)
+  - the `initialize`/`initialized` handshake and `Mcp-Session-Id` are gone from
+  the protocol layer entirely; every `POST /mcp` now builds a fresh `McpServer`
+  + `StreamableHTTPServerTransport({ sessionIdGenerator: undefined })`, handles
+  one request, and closes both on response end - the same pattern the SDK's own
+  `simpleStatelessStreamableHttp.js` reference example uses, mounted on Tandem's
+  existing Express app instead of a new one. `GET`/`DELETE /mcp` now return 405
+  (no session to fetch-or-delete). Replaces the old `McpHttpTransportManager`
+  class (session `Map`, idle-timeout cleanup timer, 20-session cap) with a
+  single `handleMcpRequest()` function - there's no server-side state left to
+  manage a lifecycle for. The dead `pairingManager.on('binding-changed', ...)`
+  listener (an admitted no-op even before this change) is removed along with
+  it. `@modelcontextprotocol/sdk` bumped `^1.27.1` → `^1.30.0`, the first Tier-1
+  SDK release implementing the new spec; confirmed Tandem's ~270 tool
+  registrations across 36 files use the legacy variadic `server.tool()` API,
+  not `registerTool()`, so none needed touching (that surface is explicitly
+  frozen since protocol version 2025-03-26 per the SDK's own source comments -
+  this migration looked different from the one a Cloudflare Workers-based MCP
+  server would need, since Tandem has no Workers/Durable-Object dependency to
+  replace in the first place). Verified with real `@modelcontextprotocol/sdk`
+  clients against a running instance, not just unit tests: a stateless HTTP
+  client (269 tools, a real `tandem_list_tabs` call round-tripping live tab
+  state), a legacy client that still sends `initialize`/`notifications/initialized`
+  (harmless no-op against a server with no session to attach it to), two
+  concurrent requests proving no state leaks between them, and the unaffected
+  stdio transport (`src/mcp/server.ts`, what Claude Code itself connects
+  through) against the same tool. **Known gap at the time, closed the same day**:
+  the SDK's transitive `fast-uri`/`hono`/`ip-address` versions carried
+  pre-existing high/moderate-severity advisories predating this bump - fixed
+  in the dependency audit below rather than as part of this migration.
+- **Real compare-and-set (CAS) on the SRW durable objects** (`src/utils/version-conflict.ts`,
+  `src/handoffs/manager.ts`, `src/annotations/manager.ts`, `src/agents/task-manager.ts`)
+  - `Handoff`/`Annotation`/`AITask` all gained a `version: number` field,
+  incremented on every write; `HandoffManager.update()`/`.resolve()`,
+  `AnnotationManager.resolve()`, and `TaskManager.updateStepStatus()` each
+  gained an optional `expectedVersion` parameter that throws
+  `VersionConflictError` (mapped to HTTP 409) on a stale write instead of
+  silently clobbering a concurrent one. Opt-in and backward compatible -
+  every existing caller that omits `expectedVersion` keeps today's
+  last-write-wins behavior unchanged; loading a pre-existing on-disk record
+  with no `version` field treats it as version 1, same as a fresh write.
+  This is PMW's "State CAS" invariant (I1) - see the theory series in
+  `docs/` for the full vocabulary.
+- **`HandoffManager.accept()`/`.reject()`** - the only paths that may
+  transition a handoff to `ready_to_resume` or `resolved`, replacing the
+  raw `update({status: ...})` calls that let a handoff be "marked ready"
+  from any status including an already-resolved one with no error.
+  `accept()`/`reject()` validate the handoff's current status is actually
+  eligible for that transition and throw `InvalidHandoffTransitionError`
+  (also mapped to 409) otherwise. `TaskHandoffCoordinator.markReady()` now
+  routes through `accept()`; the other resolution paths
+  (`resume()`/`approve()`/`reject()`/standalone approval) still call
+  `update()` directly for now - `accept()`/`reject()` cover the primary
+  human-decision entry point, not every internal call site yet. **Not
+  implemented**: authority checking (PMW's `Authority_B ⊆ Authority_A` -
+  does the accepting party's capability set actually cover what the
+  originating agent could do) - there's no agents/capability registry in
+  this codebase yet to check against; `accept()` only enforces the
+  state-machine shape today, documented as a named gap in the method's own
+  doc comment rather than silently skipped. Verified live against a running
+  instance: create → mark ready (200) → mark ready again (409, "Cannot
+  accept handoff ... from status \"ready_to_resume\"") → resolve (200) →
+  mark ready after resolved (409, "... from status \"resolved\"").
+- **Scoped memory (PRIVATE/SHARED) as a primitive shared across SRW objects**
+  (`src/utils/scope.ts`, `src/annotations/manager.ts`, `src/agents/task-manager.ts`)
+  - `Scope`/`isScope()`/`InvalidScopePromotionError` extracted out of
+  `AnnotationManager` (which already had a `PRIVATE`/`SHARED` field) into a
+  shared type so `TaskStep` could gain the same `scope` field and the same
+  one-way `promote()` method - PMW's SHARE operator (PRIVATE→SHARED,
+  irreversible, throws if already SHARED). `POST /annotations/:id/promote`
+  and `POST /tasks/:id/steps/:stepIndex/promote` (MCP `tandem_annotation_promote`
+  / `tandem_task_step_promote`) expose it; a task step with no scope set is
+  treated as implicitly SHARED (matches the pre-existing default - nothing
+  was PRIVATE before this), so promoting an unset step is itself a 409
+  the same as promoting an already-SHARED one.
+- **Decision receipts - append-only log of real decisions** (`src/agents/decision-receipts.ts`,
+  `DecisionReceiptManager`, `/decision-receipts*` routes, MCP
+  `tandem_decision_receipts_list` / `tandem_decision_receipt_get`) - PMW
+  invariant I6 (Explicit Receipt): a wake that reaches a real human decision
+  point leaves a receipt (`ACK`/`NO_ACTION`/`ACTION`/`ERROR` - PMW's own
+  vocabulary, not this codebase's `approved`/`rejected` wording, so a receipt
+  reads the same regardless of which system produced it). One row per real
+  decision, immutable once written (`list()`/`get()`/`record()` only - no
+  update or delete API at all), persisted to `decision-receipts.json` next to
+  the other durable objects. Wired into `TaskHandoffCoordinator` at every
+  point a human actually decides something: `handleApprovalResponse()` (the
+  desktop UI's approve/reject buttons, via IPC) and - found while wiring this
+  up, and fixed rather than left as a documented gap - `approve()`/`reject()`,
+  which is the path `POST /handoffs/:id/approve|reject` and the MCP tools
+  `tandem_handoff_approve`/`tandem_handoff_reject` actually call. Before this
+  fix, a decision made through the public API/MCP surface (the one agents
+  use) left no receipt at all; only the in-app UI path did. Standalone
+  handoffs (no linked task) now also record a receipt, with `taskId`/
+  `stepId`/`riskLevel` all `null` since there's no task step to attribute it
+  to. Verified live against a running instance end to end: created a
+  standalone handoff, approved it through the real `/handoffs/:id/approve`
+  route, confirmed a receipt appeared with `decision: "ACTION"`; rejected a
+  second one, confirmed `decision: "NO_ACTION"` and that
+  `?decision=NO_ACTION` filtering finds it; fetched both by ID; and drove the
+  same list/get calls through a real stateless MCP HTTP client, not just
+  `apiCall` mocks.
+- **Agent registry - identity substrate for PMW's `agents` primitive**
+  (`src/agents/agent-registry.ts`, `AgentRegistry`, `/agents*` routes, MCP
+  `tandem_agents_list` / `tandem_agent_get`) - a lightweight record
+  (`id`, `kind: 'human'|'ai'`, `firstSeenAt`, `lastSeenAt`) for every
+  distinct actor Tandem has seen, replacing the bare agentId strings that
+  flowed through TabLockManager/HandoffManager/DecisionReceiptManager with
+  no identity behind them. Deliberately minimal - no capability/authority
+  set yet; that's what HandoffManager's `accept()`/`reject()` doc comment
+  already named as missing (PMW's `Authority_B ⊆ Authority_A` check), and
+  this registry is the identity substrate that check will eventually
+  consult, not the check itself. `touch(id, kind?)` persists to disk only
+  the first time an id is seen - `lastSeenAt` on a renewal updates in
+  memory only, the same tradeoff `AgentTrustStore` already makes for its
+  T2/T4 windows, since TabLockManager can call touch() many times a minute
+  in an active session and a disk write per tool call isn't warranted.
+- **TabLockManager (PMW's ISOLATE operator) now grounds every acquire() in
+  the agent registry** (`src/agents/tab-lock-manager.ts`) - `acquire()`
+  touches the registry on every call, successful or not, so an agent
+  merely attempting isolation is tracked even when it loses the race for
+  an already-held tab. Constructor now takes `AgentRegistry` as a required
+  first argument.
+- **Fixed: `tandem_tab_lock` / `tandem_tab_unlock` never actually reached
+  TabLockManager with an agent identity** (`src/mcp/tools/tasks.ts`) - found
+  while wiring the registry into TabLockManager and confirmed live rather
+  than assumed. `POST /tab-locks/acquire` and `/release` read
+  `req.body.agentId` (documented in `skill/SKILL.md`'s own curl example);
+  `tandem_tab_lock` was instead sending `agent`, so a real call either
+  dropped the identity silently or hit the route's `tabId and agentId
+  required` 400 depending on whether the caller passed it - and
+  `tandem_tab_unlock` had no `agent` parameter at all, so every real
+  release call 400'd, full stop. Both tools now send `agentId` correctly;
+  `tandem_tab_unlock` gained the missing `agent` parameter. Verified live:
+  acquired a real tab lock over MCP, confirmed it appeared in
+  `tandem_agents_list`; released it as the wrong owner (clean `{ok:false}`,
+  not a 400) and as the correct owner (succeeded); confirmed the registry's
+  `firstSeenAt` survived a full Electron restart while `lastSeenAt` updated,
+  proving the disk-persistence tradeoff above actually round-trips.
+
 ### Security
+
+- **Dependency audit: 22 of 23 `npm audit --audit-level=high` findings
+  resolved.** `npm audit fix` (non-force, run twice - the second pass picked
+  up `brace-expansion` after the first pass's resolution shifted its range)
+  cleanly fixed 21: `tar` (critical - DoS/path-confusion via crafted
+  archives), `undici`, `ws`, `hono`/`@hono/node-server`, `fast-uri`,
+  `ip-address` (the three flagged as a known gap by the MCP migration above),
+  `brace-expansion`, `js-yaml`, `nanoid`, `postcss`, `form-data`,
+  `body-parser`, and the `electron-builder` toolchain
+  (`app-builder-lib`/`builder-util`/`builder-util-runtime`/`dmg-builder`/
+  `electron-builder-squirrel-windows`/`electron-publish`/`electron-updater`) -
+  none required a breaking major-version bump. `adm-zip` `^0.5.16` → `^0.6.0`
+  bumped by hand (`npm audit fix --force` would have also force-bumped
+  Electron in the same pass, not wanted here) after checking its only call
+  site (`src/extensions/crx-downloader.ts` - `new AdmZip()` /
+  `.getEntries()` / `.extractAllTo()` on a downloaded, externally-sourced
+  Chrome extension ZIP, i.e. exactly the vulnerable "crafted ZIP triggers 4GB
+  memory allocation" path) uses only long-stable, 3-call API surface. Full
+  suite (165 files / 3128 tests) green after each change.
+  **Deliberately NOT fixed**: `electron` itself (`^40.6.0`, installed
+  40.10.6) has a high-severity advisory (sandboxed iframe bypasses the
+  `allow-popups` restriction via the OpenURL navigation path) with no patched
+  release inside the 40.x/41.x line - the fix requires jumping to 42.0.0+,
+  and `npm audit fix --force` wants to go all the way to 43.3.0 (three major
+  versions up). A jump that size needs a native-module rebuild
+  (`better-sqlite3` via `electron-rebuild`) and full regression testing
+  across the whole app before landing, not a blind `--force` in the same
+  pass as everything else here - left as a deliberate, tracked, separate
+  decision rather than silently skipped or silently forced.
 
 - **Shell renderer XSS hardening** (`shell/js/html-escape.js`, `shell/js/**`) -
   one shared HTML escaper (covers quotes for attribute positions) replaces six
@@ -494,80 +871,6 @@ Cloudflare human mode — phase 3. Challenge-sensitive tabs now run with reduced
 - **Security gating on challenge-sensitive tabs** — `SecurityManager` now refuses to attach ScriptGuard main-world monitors and blocks `BehaviorMonitor` resource polling on tabs the policy manager flags as challenge-sensitive. Live policy flips trigger an immediate de-escalation on the affected tab. Normal non-Cloudflare tabs keep the existing instrumentation path.
 - **Stealth preload is mode-aware** — the per-frame preload now performs a synchronous IPC (`tandem:cloudflare-policy-sync`) to the main process before injecting, and chooses between `early` (Turnstile OOPIFs) and `full` (everything else) based on the returned disposition. Google auth and `file://` frames are still skipped entirely.
 - **DevTools attach logs include the `webContents` id** — every CDP attach, security-domain enable, and already-attached message now carries `wc <id>`, which makes diagnosing OOPIF-specific Cloudflare attach races possible from logs alone.
-
-### Added (Localization — fork-local, not upstreamed)
-
-- **zh-TW (Traditional Chinese) interface language, selectable in Settings**
-  (`src/locale/resolver.ts`, `src/preload/locale.ts`, `shell/js/i18n.js`,
-  `--tandem-locale=` startup argument, `general.language` config field,
-  Settings → General → Language) - built as a mirror of this repo's existing
-  theme (dark/light) mechanism end to end: config persists the choice,
-  `src/preload/locale.ts` stamps `<html lang>`/`data-tandem-initial-locale`
-  before paint on the main window (no flash of English), pages without
-  preload access (`<webview>`-hosted shell pages) pick it up from an async
-  `/config` fetch instead, and a `tandem-locale` `BroadcastChannel` applies
-  the change live in every open window the moment it's changed in Settings.
-- **`shell/js/i18n.js` translation engine** - rather than requiring a
-  `data-i18n="key"` attribute on every one of the ~700 hardcoded English UI
-  strings across the shell, this walks the DOM (mirroring
-  `shortcut-labels.js`'s existing TreeWalker technique for Cmd/Ctrl label
-  rewriting) and replaces exact-match English source strings with their
-  translation in text nodes and in `title`/`placeholder`/`aria-label`/`alt`/
-  `data-tip` attributes, backed by a `MutationObserver` so content injected
-  later by any shell script is translated automatically without that script
-  needing to call anything. `window.TandemI18n.t(key)` / `t(key, params)`
-  cover the remaining cases the DOM scan structurally can't reach: strings
-  fused with runtime data via template literals (`{count}`/`{name}`-style
-  placeholder substitution), `<input>`/`<textarea>` `.value`, attribute or
-  property writes on an element that already exists in the document (which
-  never produces a childList mutation for the observer to see), and native
-  `alert()`/`confirm()` dialogs. Untranslated strings are left as English,
-  so any surface can be localized incrementally without touching this file.
-  16 unit tests in `shell/tests/i18n.test.js`.
-- **zh-TW translation dictionary now totals 726 entries** across every shell
-  surface: the main window chrome (toolbar, sidebar, find bar, draw toolbar, onboarding,
-  password vault, Wingman panel, keyboard-shortcuts overlay), the full
-  Settings page (all 11 tabs, including the Connected Agents pairing flow's
-  copy-paste AI instruction block and every toast/confirm message), the
-  standalone Bookmarks-manager and New Tab pages, the Help page, the About
-  panel (both the standalone page and the extensions-sidebar variant), every
-  sidebar panel (bookmarks, history, pinboards, workspaces, tab context
-  menu), the Wingman chat and handoff/approval-card UI, and the extensions/
-  video-recorder/ClaroNote/window-chrome surfaces. Pre-existing non-English
-  source strings (a handful of leftover Dutch strings from before this fork)
-  were translated as found rather than "fixed" to English first. Verified
-  with real device/DOM-dump checks against the running app, not just unit
-  tests, for the surfaces translated in the prior session (main window,
-  Settings). `npx vitest run` (3132 tests) and `npx tsc --noEmit` are clean
-  repo-wide; `npx eslint` is clean for every file this pass touched (a
-  pre-existing `state-tree.js` lint error from the unrelated, still-uncommitted
-  Task/State Tree work is untouched, not introduced by this pass).
-- **Translation dictionary split one file per language** (`shell/js/i18n/zh-TW.js`,
-  new; `shell/js/i18n.js` now reads `window.__TANDEM_I18N_DICTS__` instead of
-  holding the dictionary inline) - decided after comparing this repo's needs
-  against two of the author's other multi-language properties (a 60-language
-  Astro/Workers site and a 40-language sibling): both key their dictionaries
-  on literal English source text too, same as Tandem's TreeWalker-matching
-  approach already did - the only structural gap was that Tandem nested every
-  locale in one shared object literal instead of one file per language. That
-  gap was concrete, not hypothetical: merging four parallel translation
-  passes into the old single-file dictionary earlier in this same pass
-  surfaced three real duplicate-key collisions that had to be found and fixed
-  by hand. Splitting by file removes that class of conflict entirely (each
-  language's file is independent) without touching the matching engine, the
-  key scheme, or any existing translation - `shell/js/i18n/zh-TW.js` is a
-  mechanical, verified-byte-identical extraction of the prior inline object.
-  Every shell HTML document now loads `js/i18n/zh-TW.js` before `js/i18n.js`.
-  Adding a second language going forward means one new file under
-  `shell/js/i18n/` plus one new `<script>` tag per HTML document - no changes
-  to `i18n.js` itself. **Semantic keys (e.g. `'action.cancel'` instead of the
-  English string) were considered and explicitly rejected**: neither
-  reference property uses them either, and Tandem's TreeWalker DOM-scan -
-  the mechanism that lets most strings need only a dictionary entry, no code
-  change - depends on the key being the literal on-screen English text: a
-  semantic-key dictionary can't drive it, and would mean reintroducing the
-  `data-i18n="key"` attribute-on-every-element approach this file's own
-  header comment already documents choosing not to do.
 
 ### Fixed
 

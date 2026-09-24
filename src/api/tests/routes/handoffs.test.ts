@@ -18,6 +18,7 @@ import { registerHandoffRoutes } from '../../routes/handoffs';
 import { createMockContext, createTestApp } from '../helpers';
 import type { RouteContext } from '../../context';
 import { wingmanAlert } from '../../../notifications/alert';
+import { InsufficientAuthorityError } from '../../../handoffs/manager';
 
 describe('Handoff Routes', () => {
   let ctx: RouteContext;
@@ -412,7 +413,7 @@ describe('Handoff Routes', () => {
       const res = await request(app).post('/handoffs/handoff-ready/ready');
 
       expect(res.status).toBe(200);
-      expect(ctx.taskHandoffCoordinator.markReady).toHaveBeenCalledWith('handoff-ready');
+      expect(ctx.taskHandoffCoordinator.markReady).toHaveBeenCalledWith('handoff-ready', undefined);
       expect(res.body.status).toBe('ready_to_resume');
     });
 
@@ -428,6 +429,38 @@ describe('Handoff Routes', () => {
       const failing = await request(app).post('/handoffs/handoff-ready/ready');
       expect(failing.status).toBe(500);
       expect(failing.body.error).toBe('handoff not resumable yet');
+    });
+
+    it('passes actorId through to markReady for the I4 authority check', async () => {
+      vi.mocked(ctx.taskHandoffCoordinator.markReady).mockReturnValueOnce({ id: 'handoff-ready', status: 'ready_to_resume' } as any);
+      const res = await request(app).post('/handoffs/handoff-ready/ready').send({ actorId: 'gpt-agent' });
+      expect(res.status).toBe(200);
+      expect(ctx.taskHandoffCoordinator.markReady).toHaveBeenCalledWith('handoff-ready', 'gpt-agent');
+    });
+
+    it('returns 400 when actorId is not a string', async () => {
+      const res = await request(app).post('/handoffs/handoff-ready/ready').send({ actorId: 42 });
+      expect(res.status).toBe(400);
+      expect(ctx.taskHandoffCoordinator.markReady).not.toHaveBeenCalled();
+    });
+
+    it('returns 403 and records an ERROR decision receipt when I4 denies the actor', async () => {
+      vi.mocked(ctx.taskHandoffCoordinator.markReady).mockImplementationOnce(() => {
+        throw new InsufficientAuthorityError('handoff-ready', 'ai', 'high');
+      });
+      vi.mocked(ctx.handoffManager.get).mockReturnValueOnce({ taskId: 'task-1', stepId: 'step-1' } as any);
+
+      const res = await request(app).post('/handoffs/handoff-ready/ready').send({ actorId: 'gpt-agent' });
+
+      expect(res.status).toBe(403);
+      expect(ctx.decisionReceiptManager.record).toHaveBeenCalledWith({
+        taskId: 'task-1',
+        stepId: 'step-1',
+        handoffId: 'handoff-ready',
+        actor: 'gpt-agent',
+        decision: 'ERROR',
+        riskLevel: 'high',
+      });
     });
   });
 
@@ -497,7 +530,14 @@ describe('Handoff Routes', () => {
       const res = await request(app).post('/handoffs/handoff-approve/approve');
 
       expect(res.status).toBe(200);
-      expect(ctx.taskHandoffCoordinator.approve).toHaveBeenCalledWith('handoff-approve');
+      expect(ctx.taskHandoffCoordinator.approve).toHaveBeenCalledWith('handoff-approve', undefined);
+    });
+
+    it('passes actorId through for receipt attribution', async () => {
+      vi.mocked(ctx.taskHandoffCoordinator.approve).mockReturnValueOnce({ id: 'handoff-approve', status: 'resolved' } as any);
+      const res = await request(app).post('/handoffs/handoff-approve/approve').send({ actorId: 'user' });
+      expect(res.status).toBe(200);
+      expect(ctx.taskHandoffCoordinator.approve).toHaveBeenCalledWith('handoff-approve', 'user');
     });
 
     it('returns 404 when approval handoff is missing', async () => {
@@ -531,7 +571,7 @@ describe('Handoff Routes', () => {
       const res = await request(app).post('/handoffs/handoff-reject/reject');
 
       expect(res.status).toBe(200);
-      expect(ctx.taskHandoffCoordinator.reject).toHaveBeenCalledWith('handoff-reject');
+      expect(ctx.taskHandoffCoordinator.reject).toHaveBeenCalledWith('handoff-reject', undefined);
     });
 
     it('returns 404 when rejection handoff is missing', async () => {

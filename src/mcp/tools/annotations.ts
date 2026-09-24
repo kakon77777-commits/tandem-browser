@@ -17,13 +17,17 @@ export function registerAnnotationTools(server: McpServer): void {
       height: z.number().describe('Region height in pixels'),
       message: z.string().optional().describe('Human message describing what is annotated'),
       taskId: z.string().optional().describe('Task ID this annotation serves as goal context'),
+      scope: z.enum(['PRIVATE', 'SHARED']).optional().describe('PRIVATE = visible only to ownerAgent, SHARED = visible to everyone (default)'),
+      ownerAgent: z.string().optional().describe('Agent ID that owns this annotation, relevant when scope is PRIVATE'),
     }),
-    async ({ tabId, x, y, width, height, message, taskId }) => {
+    async ({ tabId, x, y, width, height, message, taskId, scope, ownerAgent }) => {
       const annotation = await apiCall('POST', '/annotations', {
         tabId,
         region: { x, y, width, height },
         message,
         taskId,
+        scope,
+        ownerAgent,
       });
       await logActivity('annotate', `${tabId}${annotation?.dom?.ref ? ` -> ${annotation.dom.ref}` : ' (no DOM match)'}`);
       return { content: [{ type: 'text', text: JSON.stringify(annotation, null, 2) }] };
@@ -66,6 +70,17 @@ export function registerAnnotationTools(server: McpServer): void {
     async ({ id }) => {
       const data = await apiCall('POST', `/annotations/${encodeURIComponent(id)}/resolve`);
       await logActivity('annotation_resolve', id);
+      return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
+    }
+  );
+
+  server.tool(
+    'tandem_annotation_promote',
+    'Promote a PRIVATE Human Annotation to SHARED, making it visible to everyone. Fails if it is already SHARED.',
+    { id: z.string().describe('Annotation ID') },
+    async ({ id }) => {
+      const data = await apiCall('POST', `/annotations/${encodeURIComponent(id)}/promote`);
+      await logActivity('annotation_promote', id);
       return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
     }
   );

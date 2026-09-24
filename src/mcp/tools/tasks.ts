@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { apiCall, logActivity } from '../api-client.js';
 import { coerceShape } from '../coerce.js';
+import { getRiskLevel } from '../../agents/task-manager.js';
 
 export function registerTaskTools(server: McpServer): void {
   server.tool(
@@ -19,7 +20,7 @@ export function registerTaskTools(server: McpServer): void {
       const formattedSteps = steps.map((s: { description: string; actionType: string; params?: Record<string, string> }) => ({
         description: s.description,
         action: { type: s.actionType, params: s.params || {} },
-        riskLevel: 'low' as const,
+        riskLevel: getRiskLevel(s.actionType),
         requiresApproval: false,
       }));
 
@@ -137,6 +138,20 @@ export function registerTaskTools(server: McpServer): void {
   );
 
   server.tool(
+    'tandem_task_step_promote',
+    'Promote a PRIVATE task step to SHARED, making it visible to everyone. Fails if it is already SHARED.',
+    {
+      id: z.string().describe('The task ID'),
+      stepIndex: z.number().describe('Zero-based index of the step to promote'),
+    },
+    async ({ id, stepIndex }) => {
+      const task = await apiCall('POST', `/tasks/${encodeURIComponent(id)}/steps/${stepIndex}/promote`);
+      await logActivity('task_step_promote', `task ${id}, step ${stepIndex}`);
+      return { content: [{ type: 'text', text: JSON.stringify(task, null, 2) }] };
+    }
+  );
+
+  server.tool(
     'tandem_tab_lock',
     'Acquire a lock on a browser tab for exclusive agent access. Use for multi-agent coordination to prevent conflicting actions on the same tab.',
     coerceShape({
@@ -146,7 +161,10 @@ export function registerTaskTools(server: McpServer): void {
     }),
     async ({ tabId, agent, timeout }) => {
       const body: Record<string, unknown> = { tabId };
-      if (agent) body.agent = agent;
+      // Route reads req.body.agentId (see POST /tab-locks/acquire) — the
+      // tool's own `agent` param name doesn't match, so a caller that
+      // supplied it was silently dropped and got a 400 "agentId required".
+      if (agent) body.agentId = agent;
       if (timeout !== undefined) body.timeout = timeout;
       const data = await apiCall('POST', '/tab-locks/acquire', body);
       await logActivity('tab_lock', `locked tab ${tabId}${agent ? ` for ${agent}` : ''}`);
@@ -156,12 +174,16 @@ export function registerTaskTools(server: McpServer): void {
 
   server.tool(
     'tandem_tab_unlock',
-    'Release a lock on a browser tab, allowing other agents to access it.',
-    {
+    'Release a lock on a browser tab, allowing other agents to access it. Only the ' +
+    'lock owner (or "user") can release a lock held by someone else.',
+    coerceShape({
       tabId: z.string().describe('The tab ID to unlock'),
-    },
-    async ({ tabId }) => {
-      const data = await apiCall('POST', '/tab-locks/release', { tabId });
+      agent: z.string().optional().describe('Agent identifier releasing the lock (must be the current owner, or "user")'),
+    }),
+    async ({ tabId, agent }) => {
+      const body: Record<string, unknown> = { tabId };
+      if (agent) body.agentId = agent;
+      const data = await apiCall('POST', '/tab-locks/release', body);
       await logActivity('tab_unlock', `released tab ${tabId}`);
       return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
     }

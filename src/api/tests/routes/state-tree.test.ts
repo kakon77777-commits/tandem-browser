@@ -19,10 +19,12 @@ vi.mock('fs', () => ({
     writeFileSync: vi.fn(),
     existsSync: vi.fn().mockReturnValue(true),
     mkdirSync: vi.fn(),
+    readFileSync: vi.fn().mockReturnValue(Buffer.from('fake-png')),
   },
   writeFileSync: vi.fn(),
   existsSync: vi.fn().mockReturnValue(true),
   mkdirSync: vi.fn(),
+  readFileSync: vi.fn().mockReturnValue(Buffer.from('fake-png')),
 }));
 
 import { registerStateTreeRoutes } from '../../routes/state-tree';
@@ -113,6 +115,73 @@ describe('State Tree Routes', () => {
     });
   });
 
+  describe('POST /state-tree/:id/join', () => {
+    it('returns 404 when the target node does not exist', async () => {
+      vi.mocked(ctx.stateTreeManager.get).mockReturnValueOnce(null);
+      const res = await request(app).post('/state-tree/ghost/join').send({ joinedFromId: 'state-2' });
+      expect(res.status).toBe(404);
+    });
+
+    it('returns 400 when joinedFromId is missing', async () => {
+      vi.mocked(ctx.stateTreeManager.get).mockReturnValueOnce({
+        id: 'state-1', parentId: null, joinedFromId: null, taskId: null, tabId: null, webContentsId: null,
+        label: 'root', url: null, domSummary: null, screenshotPath: null, createdAt: 0,
+      });
+      const res = await request(app).post('/state-tree/state-1/join').send({});
+      expect(res.status).toBe(400);
+    });
+
+    it('returns 404 when joinedFromId does not exist', async () => {
+      vi.mocked(ctx.stateTreeManager.get)
+        .mockReturnValueOnce({
+          id: 'state-1', parentId: null, joinedFromId: null, taskId: null, tabId: null, webContentsId: null,
+          label: 'root', url: null, domSummary: null, screenshotPath: null, createdAt: 0,
+        })
+        .mockReturnValueOnce(null);
+
+      const res = await request(app).post('/state-tree/state-1/join').send({ joinedFromId: 'ghost' });
+      expect(res.status).toBe(404);
+    });
+
+    it('joins an existing branch, inheriting the target node\'s taskId', async () => {
+      vi.mocked(ctx.stateTreeManager.get)
+        .mockReturnValueOnce({
+          id: 'state-1', parentId: null, joinedFromId: null, taskId: 'task-1', tabId: null, webContentsId: null,
+          label: 'root', url: null, domSummary: null, screenshotPath: null, createdAt: 0,
+        })
+        .mockReturnValueOnce({
+          id: 'state-2', parentId: null, joinedFromId: null, taskId: 'task-1', tabId: null, webContentsId: null,
+          label: 'other branch', url: null, domSummary: null, screenshotPath: null, createdAt: 1,
+        });
+
+      const res = await request(app).post('/state-tree/state-1/join').send({ joinedFromId: 'state-2', label: 'reconciled' });
+
+      expect(res.status).toBe(200);
+      expect(ctx.stateTreeManager.join).toHaveBeenCalledWith('state-1', 'state-2', expect.objectContaining({
+        taskId: 'task-1',
+        label: 'reconciled',
+      }));
+    });
+
+    it('returns 409 when the manager rejects the join', async () => {
+      vi.mocked(ctx.stateTreeManager.get)
+        .mockReturnValueOnce({
+          id: 'state-1', parentId: null, joinedFromId: null, taskId: null, tabId: null, webContentsId: null,
+          label: 'root', url: null, domSummary: null, screenshotPath: null, createdAt: 0,
+        })
+        .mockReturnValueOnce({
+          id: 'state-1', parentId: null, joinedFromId: null, taskId: null, tabId: null, webContentsId: null,
+          label: 'root', url: null, domSummary: null, screenshotPath: null, createdAt: 0,
+        });
+      vi.mocked(ctx.stateTreeManager.join).mockImplementation(() => {
+        throw Object.assign(new Error('Cannot join state-1 into state-1: self'), { name: 'InvalidJoinError' });
+      });
+
+      const res = await request(app).post('/state-tree/state-1/join').send({ joinedFromId: 'state-1' });
+      expect(res.status).toBe(409);
+    });
+  });
+
   describe('GET /state-tree', () => {
     it('passes filters through to the manager', async () => {
       const res = await request(app).get('/state-tree').query({ taskId: 'task-1', tabId: 'tab-1', rootsOnly: 'true' });
@@ -149,6 +218,32 @@ describe('State Tree Routes', () => {
     it('returns 404 for an unknown node', async () => {
       const res = await request(app).get('/state-tree/missing');
       expect(res.status).toBe(404);
+    });
+  });
+
+  describe('GET /state-tree/:id/screenshot', () => {
+    it('returns 404 when the node has no screenshot', async () => {
+      vi.mocked(ctx.stateTreeManager.get).mockReturnValueOnce({
+        id: 'state-1', parentId: null, taskId: null, tabId: null, webContentsId: null,
+        label: 'root', url: null, domSummary: null, screenshotPath: null, createdAt: 0,
+      });
+      const res = await request(app).get('/state-tree/state-1/screenshot');
+      expect(res.status).toBe(404);
+    });
+
+    it('returns 404 for an unknown node', async () => {
+      const res = await request(app).get('/state-tree/missing/screenshot');
+      expect(res.status).toBe(404);
+    });
+
+    it('streams the PNG when the node has a screenshot on disk', async () => {
+      vi.mocked(ctx.stateTreeManager.get).mockReturnValueOnce({
+        id: 'state-1', parentId: null, taskId: null, tabId: null, webContentsId: null,
+        label: 'root', url: null, domSummary: null, screenshotPath: 'C:/fake/state-1.png', createdAt: 0,
+      });
+      const res = await request(app).get('/state-tree/state-1/screenshot');
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toMatch(/image\/png/);
     });
   });
 

@@ -8,6 +8,7 @@ import type { ConfigManager } from '../config/manager';
 import type { GooglePhotosManager } from '../integrations/google-photos';
 import { createLogger } from '../utils/logger';
 import { IpcChannels } from '../shared/ipc-channels';
+import { capturePagePng } from '../utils/screenshot';
 
 const log = createLogger('DrawOverlay');
 
@@ -79,8 +80,7 @@ export class DrawOverlayManager {
       }
 
       // Step 1: Capture webview
-      const nativeImage = await wc.capturePage();
-      const webviewBase64 = nativeImage.toPNG().toString('base64');
+      const webviewBase64 = (await capturePagePng(wc)).toString('base64');
 
       // Step 2: Ask renderer to composite (overlay canvas + webview screenshot)
       const compositeBase64: string = await this.win.webContents.executeJavaScript(`
@@ -117,8 +117,7 @@ export class DrawOverlayManager {
       }
 
       // Step 1: Capture webview
-      const nativeImg = await wc.capturePage();
-      const webviewBase64 = nativeImg.toPNG().toString('base64');
+      const webviewBase64 = (await capturePagePng(wc)).toString('base64');
 
       // Step 2: Composite with canvas overlay in renderer
       const compositeBase64: string = await this.win.webContents.executeJavaScript(`
@@ -155,8 +154,7 @@ export class DrawOverlayManager {
       }
 
       // Capture webview only
-      const nativeImg = await wc.capturePage();
-      const buffer = nativeImg.toPNG();
+      const buffer = await capturePagePng(wc);
       const { picturesPath, appPath, filename, base64 } = this.persistScreenshotBuffer(buffer, currentUrl);
 
       // Notify renderer

@@ -1,7 +1,7 @@
 import type { Request, Response, Router } from 'express';
 import type { RouteContext } from '../context';
 import type { Handoff, HandoffStatus, UpdateHandoffInput } from '../../handoffs/manager';
-import { HANDOFF_STATUSES } from '../../handoffs/manager';
+import { HANDOFF_STATUSES, InsufficientAuthorityError } from '../../handoffs/manager';
 import type { HandoffAttentionLevel } from '../../handoffs/attention';
 import { getHandoffAttentionLevel } from '../../handoffs/attention';
 import { wingmanAlert } from '../../notifications/alert';
@@ -81,6 +81,23 @@ function resolveTargetContext(ctx: RouteContext, workspaceId: string | null | un
     workspaceId: resolvedWorkspaceId,
     tabId: normalizedTabId,
   };
+}
+
+/**
+ * PMW invariant I6: an I4 authority denial is itself a real decision point
+ * (ERROR), not just an HTTP status. The thrown error doesn't carry
+ * taskId/stepId, so re-fetch the handoff to attribute the receipt.
+ */
+function recordAuthorityDenial(ctx: RouteContext, e: InsufficientAuthorityError, actorId?: string): void {
+  const handoff = ctx.handoffManager.get(e.handoffId);
+  ctx.decisionReceiptManager.record({
+    taskId: handoff?.taskId ?? null,
+    stepId: handoff?.stepId ?? null,
+    handoffId: e.handoffId,
+    actor: actorId ?? 'unknown',
+    decision: 'ERROR',
+    riskLevel: e.riskLevel,
+  });
 }
 
 export function registerHandoffRoutes(router: Router, ctx: RouteContext): void {
@@ -310,15 +327,23 @@ export function registerHandoffRoutes(router: Router, ctx: RouteContext): void {
   });
 
   router.post('/handoffs/:id/ready', (req: Request, res: Response) => {
+    const { actorId } = req.body as Record<string, unknown>;
+    if (!isOptionalStringInput(actorId)) {
+      res.status(400).json({ error: 'actorId must be a string when provided' });
+      return;
+    }
     try {
       const handoffId = req.params.id as string;
-      const handoff = ctx.taskHandoffCoordinator.markReady(handoffId);
+      const handoff = ctx.taskHandoffCoordinator.markReady(handoffId, actorId as string | undefined);
       if (!handoff) {
         res.status(404).json({ error: 'Handoff not found' });
         return;
       }
       res.json(serializeHandoff(ctx, handoff));
     } catch (e) {
+      if (e instanceof InsufficientAuthorityError) {
+        recordAuthorityDenial(ctx, e, actorId as string | undefined);
+      }
       handleRouteError(res, e);
     }
   });
@@ -338,9 +363,14 @@ export function registerHandoffRoutes(router: Router, ctx: RouteContext): void {
   });
 
   router.post('/handoffs/:id/approve', (req: Request, res: Response) => {
+    const { actorId } = req.body as Record<string, unknown>;
+    if (!isOptionalStringInput(actorId)) {
+      res.status(400).json({ error: 'actorId must be a string when provided' });
+      return;
+    }
     try {
       const handoffId = req.params.id as string;
-      const handoff = ctx.taskHandoffCoordinator.approve(handoffId);
+      const handoff = ctx.taskHandoffCoordinator.approve(handoffId, actorId as string | undefined);
       if (!handoff) {
         res.status(404).json({ error: 'Handoff not found' });
         return;
@@ -352,9 +382,14 @@ export function registerHandoffRoutes(router: Router, ctx: RouteContext): void {
   });
 
   router.post('/handoffs/:id/reject', (req: Request, res: Response) => {
+    const { actorId } = req.body as Record<string, unknown>;
+    if (!isOptionalStringInput(actorId)) {
+      res.status(400).json({ error: 'actorId must be a string when provided' });
+      return;
+    }
     try {
       const handoffId = req.params.id as string;
-      const handoff = ctx.taskHandoffCoordinator.reject(handoffId);
+      const handoff = ctx.taskHandoffCoordinator.reject(handoffId, actorId as string | undefined);
       if (!handoff) {
         res.status(404).json({ error: 'Handoff not found' });
         return;

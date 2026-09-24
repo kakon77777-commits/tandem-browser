@@ -1,5 +1,7 @@
-import type { Handoff, HandoffManager } from '../handoffs/manager';
-import type { TaskManager } from './task-manager';
+import type { Handoff, HandoffManager, AuthorityContext } from '../handoffs/manager';
+import type { TaskManager, RiskLevel } from './task-manager';
+import type { DecisionReceiptManager } from './decision-receipts';
+import type { AgentRegistry } from './agent-registry';
 import { wingmanAlert } from '../notifications/alert';
 
 function appendHandoffNote(body: string, note: string): string {
@@ -14,6 +16,8 @@ export class TaskHandoffCoordinator {
   constructor(
     private readonly taskManager: TaskManager,
     private readonly handoffManager: HandoffManager,
+    private readonly decisionReceiptManager: DecisionReceiptManager,
+    private readonly agentRegistry: AgentRegistry,
   ) {}
 
   handleApprovalRequest(data: Record<string, unknown>): Handoff | null {
@@ -90,6 +94,11 @@ export class TaskHandoffCoordinator {
       return null;
     }
 
+    // PMW invariant I6 (Explicit Receipt): this is the point a real
+    // human decision on an agent's requested action lands — record it,
+    // in addition to (not replacing) TaskManager's own activity log.
+    this.recordApprovalReceipt(taskId, stepId, handoff.id, data.approved);
+
     this.syncHandoffState(updated);
     return updated;
   }
@@ -129,19 +138,36 @@ export class TaskHandoffCoordinator {
     return handoff;
   }
 
-  markReady(handoffId: string): Handoff | null {
-    const handoff = this.handoffManager.update(handoffId, {
-      status: 'ready_to_resume',
-      open: true,
-      actionLabel: 'Resume agent',
-      body: appendHandoffNote(
-        this.requireHandoff(handoffId)?.body ?? '',
-        'Human marked this task ready for the agent to resume.',
-      ),
-    });
-    if (!handoff) {
+  /**
+   * Marks a handoff ready for the agent to resume. Routes through
+   * HandoffManager.accept() — the only path that may set `ready_to_resume` —
+   * so an already-resolved handoff is correctly rejected (409, see
+   * InvalidHandoffTransitionError) instead of silently "succeeding" the
+   * way a raw update() would have.
+   *
+   * @param actorId - optional PMW I4 guard. Omit to keep prior behavior
+   * (no authority check). When supplied, resolved against AgentRegistry to
+   * find the actor's kind; `'user'` always resolves to `'human'` (matching
+   * TabLockManager/AgentRegistry's own hardcoded treatment of that
+   * sentinel elsewhere) even if it was never explicitly touch()'d, so a
+   * real human can't get locked out of their own approval by a registry
+   * that just hasn't seen `'user'` yet. Any other unregistered id fails
+   * closed as `'ai'`, never `'human'`. Blocks an AI agent from
+   * self-clearing a handoff linked to its own medium/high-risk step — see
+   * HandoffManager.accept().
+   */
+  markReady(handoffId: string, actorId?: string): Handoff | null {
+    const existing = this.requireHandoff(handoffId);
+    if (!existing) {
       return null;
     }
+    const authority: AuthorityContext | undefined = actorId
+      ? { kind: actorId === 'user' ? 'human' : this.agentRegistry.get(actorId)?.kind ?? 'ai', riskLevel: this.linkedRiskLevel(existing) }
+      : undefined;
+    const handoff = this.handoffManager.accept(handoffId, {
+      actionLabel: 'Resume agent',
+      body: appendHandoffNote(existing.body, 'Human marked this task ready for the agent to resume.'),
+    }, undefined, authority);
     this.syncHandoffState(handoff);
     return handoff;
   }
@@ -173,7 +199,16 @@ export class TaskHandoffCoordinator {
     return resolved;
   }
 
-  approve(handoffId: string): Handoff | null {
+  /**
+   * @param actorId - recorded on the decision receipt for API-surface
+   * symmetry with markReady(); NOT an I4 authority check here — this
+   * design intentionally scopes I4 enforcement to markReady() -> accept()
+   * only (see HandoffManager.accept()'s doc comment). Rewiring approve()/
+   * reject() to route through accept()/reject() so they'd enforce it too
+   * is a bigger behavioral change than this primitive, left for Neo to
+   * decide as a follow-up rather than built silently.
+   */
+  approve(handoffId: string, actorId?: string): Handoff | null {
     const handoff = this.requireHandoff(handoffId);
     if (!handoff) {
       return null;
@@ -186,10 +221,12 @@ export class TaskHandoffCoordinator {
     this.requireTaskLinkedHandoff(handoffId, 'approve');
 
     this.taskManager.respondToApproval(handoff.taskId as string, handoff.stepId as string, true);
+    this.recordApprovalReceipt(handoff.taskId, handoff.stepId, handoffId, true, actorId);
     return this.handoffManager.get(handoffId);
   }
 
-  reject(handoffId: string): Handoff | null {
+  /** @param actorId - see approve()'s doc comment. */
+  reject(handoffId: string, actorId?: string): Handoff | null {
     const handoff = this.requireHandoff(handoffId);
     if (!handoff) {
       return null;
@@ -202,7 +239,31 @@ export class TaskHandoffCoordinator {
     this.requireTaskLinkedHandoff(handoffId, 'reject');
 
     this.taskManager.respondToApproval(handoff.taskId as string, handoff.stepId as string, false);
+    this.recordApprovalReceipt(handoff.taskId, handoff.stepId, handoffId, false, actorId);
     return this.handoffManager.get(handoffId);
+  }
+
+  /** Risk of the handoff's linked task step, or null if it isn't linked to one. */
+  private linkedRiskLevel(handoff: Handoff): RiskLevel | null {
+    if (!handoff.taskId || !handoff.stepId) return null;
+    return this.taskManager.getStep(handoff.taskId, handoff.stepId)?.step.riskLevel ?? null;
+  }
+
+  /**
+   * PMW invariant I6 (Explicit Receipt): records the same receipt shape
+   * regardless of whether the human decision arrived via handleApprovalResponse
+   * (desktop UI, IPC) or approve()/reject() (public API + MCP tools —
+   * tandem_handoff_approve/reject). Both are real decision points.
+   */
+  private recordApprovalReceipt(taskId: string, stepId: string, handoffId: string, approved: boolean, actorId?: string): void {
+    this.decisionReceiptManager.record({
+      taskId,
+      stepId,
+      handoffId,
+      actor: actorId ?? 'user',
+      decision: approved ? 'ACTION' : 'NO_ACTION',
+      riskLevel: this.taskManager.getStep(taskId, stepId)?.step.riskLevel ?? null,
+    });
   }
 
   private findLinkedHandoff(taskId: string, stepId: string): Handoff | null {
@@ -234,6 +295,14 @@ export class TaskHandoffCoordinator {
     if (!updated) {
       return null;
     }
+    this.decisionReceiptManager.record({
+      taskId: null,
+      stepId: null,
+      handoffId: handoff.id,
+      actor: 'user',
+      decision: approved ? 'ACTION' : 'NO_ACTION',
+      riskLevel: null,
+    });
     this.syncHandoffState(updated);
     return updated;
   }

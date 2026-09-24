@@ -1,6 +1,10 @@
 import fs from 'fs';
 import { EventEmitter } from 'events';
 import { ensureDir, tandemDir } from '../utils/paths';
+import { checkVersion } from '../utils/version-conflict';
+import { isScope, InvalidScopePromotionError, type Scope } from '../utils/scope';
+
+export { InvalidScopePromotionError } from '../utils/scope';
 
 // ─── Types ──────────────────────────────────────────────────────────
 
@@ -17,6 +21,24 @@ export interface AnnotationDomTarget {
   tagName: string | null;
 }
 
+/**
+ * PMW scoped-memory primitive (Private→Shared): PRIVATE is visible only to
+ * `ownerAgent`, SHARED is visible to everyone. New annotations default to
+ * SHARED — matches the pre-existing behavior (every annotation was
+ * implicitly visible to all callers before this field existed), so nothing
+ * gets more restrictive by default. Promoting PRIVATE→SHARED is the SHARE
+ * operator, see promote(). See src/utils/scope.ts for the shared primitive
+ * (TaskStep uses the same one).
+ *
+ * NOT YET ENFORCED: list()/get() don't filter PRIVATE annotations by
+ * caller today — there's no real agent identity/capability registry in
+ * this codebase yet to check `ownerAgent` against (see the SRW agents
+ * registry work). This only models the scope and the promotion
+ * transition; visibility enforcement is future work once that registry
+ * exists, same honesty pattern as HandoffManager.accept()'s authority gap.
+ */
+export type AnnotationScope = Scope;
+
 export interface Annotation {
   id: string;
   /** Goal context — the task this annotation serves. See src/agents/task-tree.ts */
@@ -29,6 +51,11 @@ export interface Annotation {
   message: string;
   createdAt: number;
   resolvedAt: number | null;
+  /** Compare-and-set version, incremented on every resolve()/promote(). See src/utils/version-conflict.ts. */
+  version: number;
+  scope: AnnotationScope;
+  /** Agent that created this annotation, when known. See the scope doc comment re: enforcement. */
+  ownerAgent: string | null;
 }
 
 export interface CreateAnnotationInput {
@@ -39,6 +66,9 @@ export interface CreateAnnotationInput {
   region: AnnotationRegion;
   dom?: AnnotationDomTarget | null;
   message?: string;
+  /** Defaults to SHARED — see the AnnotationScope doc comment. */
+  scope?: AnnotationScope;
+  ownerAgent?: string | null;
 }
 
 export interface AnnotationListFilters {
@@ -75,6 +105,13 @@ function sanitizeAnnotation(raw: unknown): Annotation | null {
   const region = sanitizeRegion(a.region);
   if (!region) return null;
 
+  // Records written before this field existed load as version 1 — the same
+  // value a fresh create() would have assigned.
+  const version = typeof a.version === 'number' && Number.isInteger(a.version) && a.version > 0 ? a.version : 1;
+  // Same for scope — records written before this field existed load as
+  // SHARED, matching their actual pre-existing (always-visible) behavior.
+  const scope = isScope(a.scope) ? a.scope : 'SHARED';
+
   return {
     id: a.id,
     taskId: typeof a.taskId === 'string' ? a.taskId : null,
@@ -86,6 +123,9 @@ function sanitizeAnnotation(raw: unknown): Annotation | null {
     message: typeof a.message === 'string' ? a.message : '',
     createdAt: isFiniteNumber(a.createdAt) ? a.createdAt : Date.now(),
     resolvedAt: isFiniteNumber(a.resolvedAt) ? a.resolvedAt : null,
+    version,
+    scope,
+    ownerAgent: typeof a.ownerAgent === 'string' ? a.ownerAgent : null,
   };
 }
 
@@ -160,6 +200,9 @@ export class AnnotationManager extends EventEmitter {
       message: input.message ?? '',
       createdAt: now,
       resolvedAt: null,
+      version: 1,
+      scope: input.scope ?? 'SHARED',
+      ownerAgent: input.ownerAgent ?? null,
     };
 
     this.annotations.set(annotation.id, annotation);
@@ -168,14 +211,40 @@ export class AnnotationManager extends EventEmitter {
     return cloneAnnotation(annotation);
   }
 
-  resolve(id: string): Annotation | null {
+  /** @param expectedVersion - optional CAS guard. Omit for last-write-wins; pass `existing.version` to reject a stale resolve(). */
+  resolve(id: string, expectedVersion?: number): Annotation | null {
     const existing = this.annotations.get(id);
     if (!existing) return null;
+    checkVersion(id, existing.version, expectedVersion);
 
-    const updated: Annotation = { ...existing, resolvedAt: Date.now() };
+    const updated: Annotation = { ...existing, resolvedAt: Date.now(), version: existing.version + 1 };
     this.annotations.set(id, updated);
     this.saveToDisk();
     this.emit('annotation-resolved', cloneAnnotation(updated));
+    return cloneAnnotation(updated);
+  }
+
+  /**
+   * Promote a PRIVATE annotation to SHARED — the PMW SHARE operator
+   * (Private→Shared promotion). Throws InvalidScopePromotionError if the
+   * annotation is already SHARED (nothing to promote).
+   *
+   * @param expectedVersion - optional CAS guard, see resolve()
+   */
+  promote(id: string, expectedVersion?: number): Annotation {
+    const existing = this.annotations.get(id);
+    if (!existing) {
+      throw new Error(`Annotation ${id} not found`);
+    }
+    checkVersion(id, existing.version, expectedVersion);
+    if (existing.scope === 'SHARED') {
+      throw new InvalidScopePromotionError('annotation', id, existing.scope);
+    }
+
+    const updated: Annotation = { ...existing, scope: 'SHARED', version: existing.version + 1 };
+    this.annotations.set(id, updated);
+    this.saveToDisk();
+    this.emit('annotation-promoted', cloneAnnotation(updated));
     return cloneAnnotation(updated);
   }
 

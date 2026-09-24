@@ -23,7 +23,7 @@ vi.mock('../../utils/paths', () => ({
 }));
 
 import fs from 'fs';
-import { StateTreeManager } from '../manager';
+import { StateTreeManager, InvalidJoinError } from '../manager';
 
 describe('StateTreeManager', () => {
   beforeEach(() => {
@@ -125,6 +125,93 @@ describe('StateTreeManager', () => {
     expect(manager.remove('missing')).toBe(false);
     expect(manager.remove(created.id)).toBe(true);
     expect(manager.get(created.id)).toBeNull();
+  });
+
+  describe('join() — PMW JOIN operator', () => {
+    it('creates a node with both parentId and joinedFromId set', () => {
+      const manager = new StateTreeManager();
+      const root = manager.capture({ label: 'root' });
+      const a = manager.fork(root.id, { label: 'Agent A path' });
+      const b = manager.fork(root.id, { label: 'Agent B path' });
+
+      const joined = manager.join(a.id, b.id, { label: 'reconciled' });
+
+      expect(joined.parentId).toBe(a.id);
+      expect(joined.joinedFromId).toBe(b.id);
+      expect(joined.label).toBe('reconciled');
+    });
+
+    it('throws InvalidJoinError with reason "self" when joining a node with itself', () => {
+      const manager = new StateTreeManager();
+      const root = manager.capture({ label: 'root' });
+
+      expect(() => manager.join(root.id, root.id, {})).toThrow(InvalidJoinError);
+      try {
+        manager.join(root.id, root.id, {});
+        expect.unreachable();
+      } catch (e) {
+        expect(e).toBeInstanceOf(InvalidJoinError);
+        expect((e as InvalidJoinError).reason).toBe('self');
+      }
+    });
+
+    it('throws InvalidJoinError with reason "different-roots" across unrelated captures', () => {
+      const manager = new StateTreeManager();
+      const rootA = manager.capture({ label: 'root A' });
+      const rootB = manager.capture({ label: 'root B' });
+      const a = manager.fork(rootA.id, { label: 'branch of A' });
+      const b = manager.fork(rootB.id, { label: 'branch of B' });
+
+      try {
+        manager.join(a.id, b.id, {});
+        expect.unreachable();
+      } catch (e) {
+        expect(e).toBeInstanceOf(InvalidJoinError);
+        expect((e as InvalidJoinError).reason).toBe('different-roots');
+      }
+    });
+
+    it('throws when parentId or joinedFromId does not exist', () => {
+      const manager = new StateTreeManager();
+      const root = manager.capture({ label: 'root' });
+
+      expect(() => manager.join('ghost', root.id, {})).toThrow('ghost');
+      expect(() => manager.join(root.id, 'ghost', {})).toThrow('ghost');
+    });
+
+    it('children() returns the join node from both source branches', () => {
+      const manager = new StateTreeManager();
+      const root = manager.capture({ label: 'root' });
+      const a = manager.fork(root.id, { label: 'Agent A path' });
+      const b = manager.fork(root.id, { label: 'Agent B path' });
+
+      const joined = manager.join(a.id, b.id, { label: 'reconciled' });
+
+      expect(manager.children(a.id).map((n) => n.id)).toContain(joined.id);
+      expect(manager.children(b.id).map((n) => n.id)).toContain(joined.id);
+    });
+
+    it('does not affect list()/rootsOnly filtering', () => {
+      const manager = new StateTreeManager();
+      const root = manager.capture({ label: 'root' });
+      const a = manager.fork(root.id, { label: 'A' });
+      const b = manager.fork(root.id, { label: 'B' });
+      manager.join(a.id, b.id, { label: 'reconciled' });
+
+      expect(manager.list({ rootsOnly: true }).map((n) => n.id)).toEqual([root.id]);
+      expect(manager.list()).toHaveLength(4);
+    });
+
+    it('preserves joinedFromId through a disk round-trip', () => {
+      fsState.exists = true;
+      fsState.readText = JSON.stringify([
+        { id: 'state-a', parentId: null, joinedFromId: null, label: 'a', createdAt: 1 },
+        { id: 'state-b', parentId: null, joinedFromId: 'state-a', label: 'joined', createdAt: 2 },
+      ]);
+
+      const manager = new StateTreeManager();
+      expect(manager.get('state-b')?.joinedFromId).toBe('state-a');
+    });
   });
 
   it('loads sanitized nodes from disk, dropping malformed entries', () => {
